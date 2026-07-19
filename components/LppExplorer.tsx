@@ -14,7 +14,10 @@ export default function LppExplorer() {
   const [minutes, setMinutes] = useState<(typeof TIMES)[number]>(30);
   const [selected, setSelected] = useState<Stop | null>(null);
 
-  useEffect(() => { fetch("/data/lpp-network.json").then(r => r.json()).then(setData); }, []);
+  useEffect(() => {
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+    fetch(`${basePath}/data/lpp-network.json`).then(r => r.json()).then(setData);
+  }, []);
 
   useEffect(() => {
     if (!mapNode.current || mapRef.current) return;
