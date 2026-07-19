@@ -19,6 +19,7 @@ export default function LppExplorer() {
   const [searchMessage, setSearchMessage] = useState("");
   const [minutes, setMinutes] = useState<(typeof TIMES)[number]>(30);
   const [home, setHome] = useState<Home | null>(null);
+  const [reachCount, setReachCount] = useState(0);
 
   useEffect(() => {
     const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
@@ -52,6 +53,24 @@ export default function LppExplorer() {
     };
     map.loaded() ? addStops() : map.once("load", addStops);
   }, [data]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !data?.graph || !home) return;
+    const reachable = calculateReach(data, home, minutes * 60);
+    setReachCount(reachable.filter(Number.isFinite).length);
+    const geojson = reachPolygons(data.stops, home, reachable, minutes * 60);
+    const draw = () => {
+      const source = map.getSource("reach") as GeoJSONSource | undefined;
+      if (source) source.setData(geojson);
+      else {
+        map.addSource("reach", { type: "geojson", data: geojson });
+        map.addLayer({ id: "reach-fill", type: "fill", source: "reach", paint: { "fill-color": "#00a968", "fill-opacity": 0.16 } }, map.getLayer("clusters") ? "clusters" : undefined);
+        map.addLayer({ id: "reach-line", type: "line", source: "reach", paint: { "line-color": "#008b56", "line-width": 1.5, "line-opacity": 0.65 } }, map.getLayer("clusters") ? "clusters" : undefined);
+      }
+    };
+    map.loaded() ? draw() : map.once("load", draw);
+  }, [data, home, minutes]);
 
   useEffect(() => {
     if (home || query.trim().length < 3) { setResults([]); setSearchMessage(""); return; }
@@ -93,9 +112,9 @@ export default function LppExplorer() {
       {results.length > 0 && <div className="results">{results.map((place, i) => <button key={`${place.lon}-${place.lat}-${i}`} onClick={() => chooseHome(place)}>{place.name}</button>)}</div>}
       <label className="searchLabel timeLabel">Čas poti</label>
       <div className="timeButtons">{TIMES.map(t => <button className={minutes === t ? "active" : ""} key={t} onClick={() => setMinutes(t)}>{t}<small> min</small></button>)}</div>
-      <div className="status"><span className="statusDot" /><div><strong>{home ? "Naslov je izbran" : "Vpiši in izberi naslov"}</strong><p>{home ? `Najbližje: ${nearest.map(s => s.name).join(", ")}. Izračun dosega za ${minutes} minut je naslednji korak.` : "Med zadetki izberi pravi naslov bivanja."}</p></div></div>
+      <div className="status"><span className="statusDot" /><div><strong>{home ? `Doseg v ${minutes} minutah` : "Vpiši in izberi naslov"}</strong><p>{home ? `Dosegljivih je približno ${reachCount} postajališč. Najbližje: ${nearest.map(s => s.name).join(", ")}.` : "Med zadetki izberi pravi naslov bivanja."}</p></div></div>
       <div className="facts"><span><strong>{data?.stops.length ?? "…"}</strong> postajališč</span><span><strong>{data?.routes.length ?? "…"}</strong> linij</span></div>
-      <p className="source">Vir prevoza: LPP GTFS · zemljevid in naslovi: OpenStreetMap</p>
+      <p className="source">Ocena po voznem redu GTFS: 5 min za prestop in 1,3 m/s hoje. Brez trenutnih zamud. Vir: LPP in OpenStreetMap.</p>
     </section>
     <section className="mapWrap"><div ref={mapNode} className="map" /><div className="beta">MVP · dejanski podatki LPP</div></section>
   </main>;
@@ -104,3 +123,25 @@ export default function LppExplorer() {
 function toHome(feature: PhotonFeature): Home { const p = feature.properties; const street = [p.street ?? p.name, p.housenumber].filter(Boolean).join(" "); return { name: [street, p.postcode, p.city].filter(Boolean).join(", "), lon: feature.geometry.coordinates[0], lat: feature.geometry.coordinates[1] }; }
 function distance(a: Home, b: Stop) { const x = (b.lon - a.lon) * Math.cos((a.lat * Math.PI) / 180); const y = b.lat - a.lat; return x * x + y * y; }
 function toGeoJson(stops: Stop[]): GeoJSON.FeatureCollection<GeoJSON.Point> { return { type: "FeatureCollection", features: stops.map(s => ({ type: "Feature", geometry: { type: "Point", coordinates: [s.lon, s.lat] }, properties: s })) }; }
+
+function calculateReach(data: NetworkData, home: Home, max: number) {
+  const best = Array(data.stops.length).fill(Infinity); const states = new Map<string, number>(); const heap: [number, number, number][] = [];
+  data.stops.forEach((stop, i) => { const walk = meters(home, stop) / 1.3; if (walk <= max) { best[i] = walk; states.set(`${i}|-1`, walk); push(heap, [walk, i, -1]); } });
+  while (heap.length) {
+    const [time, at, route] = pop(heap)!; if (time > max || time !== states.get(`${at}|${route}`)) continue;
+    for (const [to, travel, nextRoute] of data.graph?.[at] ?? []) {
+      const next = time + travel + (route === nextRoute ? 0 : 300); if (next > max) continue;
+      const key = `${to}|${nextRoute}`; if (next < (states.get(key) ?? Infinity)) { states.set(key, next); best[to] = Math.min(best[to], next); push(heap, [next, to, nextRoute]); }
+    }
+  }
+  return best;
+}
+function reachPolygons(stops: Stop[], home: Home, times: number[], max: number): GeoJSON.FeatureCollection<GeoJSON.Polygon> {
+  const features: GeoJSON.Feature<GeoJSON.Polygon>[] = [circle(home.lon, home.lat, Math.min(1600, max * 1.3))];
+  times.forEach((time, i) => { if (Number.isFinite(time) && time <= max) features.push(circle(stops[i].lon, stops[i].lat, Math.max(90, Math.min(900, (max - time) * 1.3)))); });
+  return { type: "FeatureCollection", features };
+}
+function circle(lon: number, lat: number, radius: number): GeoJSON.Feature<GeoJSON.Polygon> { const points: [number, number][] = []; for (let i = 0; i <= 24; i++) { const a = i / 24 * Math.PI * 2; points.push([lon + Math.cos(a) * radius / (111320 * Math.cos(lat * Math.PI / 180)), lat + Math.sin(a) * radius / 110540]); } return { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [points] } }; }
+function meters(a: Home, b: Stop) { const lat = (a.lat + b.lat) / 2 * Math.PI / 180; const x = (b.lon - a.lon) * 111320 * Math.cos(lat); const y = (b.lat - a.lat) * 110540; return Math.hypot(x, y); }
+function push(heap: [number, number, number][], value: [number, number, number]) { heap.push(value); let i = heap.length - 1; while (i) { const p = (i - 1) >> 1; if (heap[p][0] <= value[0]) break; heap[i] = heap[p]; i = p; } heap[i] = value; }
+function pop(heap: [number, number, number][]) { if (!heap.length) return; const top = heap[0], last = heap.pop()!; if (heap.length) { let i = 0; while (true) { let c = i * 2 + 1; if (c >= heap.length) break; if (c + 1 < heap.length && heap[c + 1][0] < heap[c][0]) c++; if (heap[c][0] >= last[0]) break; heap[i] = heap[c]; i = c; } heap[i] = last; } return top; }
