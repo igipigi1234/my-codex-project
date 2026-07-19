@@ -19,8 +19,10 @@ Objavljena različica: [igipigi1234.github.io/my-codex-project](https://igipigi1
 - gručenje in iskanje postajališč LPP
 - podatkovni povzetek linij in postajališč iz GTFS
 - izbira časovnega praga 15, 30 ali 45 minut
+- izračun načrtovanega dosega z hojo, vožnjo in prestopi brez LPP API-ključa
+- izbira začetka z naslovom ali klikom na zemljevid
 
-Izbira časa še ne riše izohrone. Naslednja faza je pravi izračun z voznimi redi GTFS, peš omrežjem OpenStreetMap in usmerjevalnikom OpenTripPlanner oziroma namenskim RAPTOR/Dijkstra servisom.
+Zemljevid izračuna približni načrtovani doseg iz povezav in časov v GTFS. Ne vključuje trenutnih zamud, položajev avtobusov ali obvozov. Za produkcijsko natančnost bo naslednja faza uporaba polnega časovno odvisnega RAPTOR/OpenTripPlanner izračuna in podrobnega peš omrežja.
 
 ## Podatki
 
