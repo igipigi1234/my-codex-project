@@ -16,6 +16,7 @@ export default function LppExplorer() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Home[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchMessage, setSearchMessage] = useState("");
   const [minutes, setMinutes] = useState<(typeof TIMES)[number]>(30);
   const [home, setHome] = useState<Home | null>(null);
 
@@ -53,16 +54,20 @@ export default function LppExplorer() {
   }, [data]);
 
   useEffect(() => {
-    if (home || query.trim().length < 3) { setResults([]); return; }
+    if (home || query.trim().length < 3) { setResults([]); setSearchMessage(""); return; }
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setSearching(true);
+      setSearchMessage("");
       try {
-        const params = new URLSearchParams({ q: `${query}, Ljubljana, Slovenija`, limit: "6", lang: "sl", lat: "46.0569", lon: "14.5058" });
+        const params = new URLSearchParams({ q: `${query}, Ljubljana, Slovenia`, limit: "6", lat: "46.0569", lon: "14.5058", bbox: "13.9,45.7,15.1,46.4" });
         const response = await fetch(`https://photon.komoot.io/api/?${params}`, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Geocoding failed: ${response.status}`);
         const json = await response.json() as { features: PhotonFeature[] };
-        setResults(json.features.map(toHome));
-      } catch (error) { if (!(error instanceof DOMException && error.name === "AbortError")) setResults([]); }
+        const places = json.features.map(toHome).filter(place => place.name);
+        setResults(places);
+        setSearchMessage(places.length ? "" : "Naslova nisem našel. Poskusi brez šumnikov ali dodaj poštno številko.");
+      } catch (error) { if (!(error instanceof DOMException && error.name === "AbortError")) { setResults([]); setSearchMessage("Iskanje naslovov trenutno ni dosegljivo. Poskusi znova čez trenutek."); } }
       finally { setSearching(false); }
     }, 350);
     return () => { window.clearTimeout(timer); controller.abort(); };
@@ -82,8 +87,9 @@ export default function LppExplorer() {
       <h1>Kako daleč prideš<br />z LPP?</h1>
       <p className="lead">Vpiši naslov bivanja in izberi čas poti. Na zemljevidu so uradna postajališča LPP.</p>
       <label className="searchLabel">Naslov bivanja</label>
-      <div className="search"><span>⌕</span><input value={query} onChange={e => { setQuery(e.target.value); setHome(null); }} placeholder="npr. Slovenska cesta 1" autoComplete="street-address" /></div>
+      <div className="search"><span>⌕</span><input value={query} onChange={e => { setQuery(e.target.value); setHome(null); setSearchMessage(""); }} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); setQuery(value => `${value.trim()} `); } }} placeholder="npr. Slovenska cesta 1" autoComplete="street-address" /></div>
       {searching && <p className="searchHint">Iščem naslov …</p>}
+      {!searching && searchMessage && <p className="searchHint">{searchMessage}</p>}
       {results.length > 0 && <div className="results">{results.map((place, i) => <button key={`${place.lon}-${place.lat}-${i}`} onClick={() => chooseHome(place)}>{place.name}</button>)}</div>}
       <label className="searchLabel timeLabel">Čas poti</label>
       <div className="timeButtons">{TIMES.map(t => <button className={minutes === t ? "active" : ""} key={t} onClick={() => setMinutes(t)}>{t}<small> min</small></button>)}</div>
