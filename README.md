@@ -21,6 +21,9 @@ Objavljena različica: [igipigi1234.github.io/my-codex-project](https://igipigi1
 - izbira časovnega praga 15, 30 ali 45 minut
 - izračun načrtovanega dosega z hojo, vožnjo in prestopi brez LPP API-ključa
 - izbira začetka z naslovom ali klikom na zemljevid
+- načrtovanje poti A–B z navodili, prestopi in časi
+- pregled tras, smeri in zaporedja postajališč posamezne linije
+- dnevna samodejna osvežitev uradnega GTFS
 
 Zemljevid izračuna približni načrtovani doseg iz povezav in časov v GTFS. Ne vključuje trenutnih zamud, položajev avtobusov ali obvozov. Za produkcijsko natančnost bo naslednja faza uporaba polnega časovno odvisnega RAPTOR/OpenTripPlanner izračuna in podrobnega peš omrežja.
 
