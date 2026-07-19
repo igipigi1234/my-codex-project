@@ -32,7 +32,8 @@ function parseCsv(text) {
 
 const stops = parseCsv(readEntry("stops.txt")).map(s => ({ id: s.stop_id, name: s.stop_name, lat: Number(s.stop_lat), lon: Number(s.stop_lon) })).filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lon));
 const routes = parseCsv(readEntry("routes.txt")).map(r => ({ id: r.route_id, shortName: r.route_short_name, longName: r.route_long_name, color: r.route_color || "00A968", textColor: r.route_text_color || "FFFFFF" }));
-const payload = { generatedAt: new Date().toISOString(), sourceUpdatedAt: "2026-07-18", sourceUrl: "https://data.lpp.si/api/gtfs/feed.zip", stops, routes };
+const generatedAt = new Date();
+const payload = { generatedAt: generatedAt.toISOString(), sourceUpdatedAt: generatedAt.toISOString().slice(0, 10), sourceUrl: "https://data.lpp.si/api/gtfs/feed.zip", stops, routes };
 
 mkdirSync(dirname(output), { recursive: true });
 writeFileSync(output, JSON.stringify(payload));
