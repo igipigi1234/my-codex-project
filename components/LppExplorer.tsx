@@ -32,7 +32,7 @@ export default function LppExplorer() {
 
   useEffect(() => {
     const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-    Promise.all([fetch(`${base}/data/lpp-network.json`).then(r => r.json()), fetch(`${base}/data/lpp-schedule.json`).then(r => r.json())]).then(([n, s]) => { setNetwork(n); setSchedule(s); });
+    Promise.all([fetch(`${base}/data/lpp-network.json`).then(r => r.json()), loadSchedule(`${base}/data/lpp-schedule.json.gz.b64`)]).then(([n, s]) => { setNetwork(n); setSchedule(s); });
   }, []);
 
   useEffect(() => {
@@ -154,6 +154,7 @@ function LocationInput({ label, badge, value, active, onFocus, onChange, placeho
 function JourneyCard({ journey, network, profile }: { journey: Journey; network: NetworkData; profile: DayProfile }) { return <div className="journeyCard"><div className="journeyHead"><div><strong>{Math.round(journey.duration / 60)} min</strong><small>prihod {formatTime(journey.arrival)}</small></div><span>{journey.steps.filter(s => s.kind === "ride").length} odsekov</span></div>{journey.steps.map((s, i) => s.kind === "walk" ? <div className="step walk" key={i}><i>↟</i><p>{i === journey.steps.length - 1 ? "Hoja do cilja" : `Hoja do ${network.stops[s.to].name}`}<small>{s.minutes} min</small></p></div> : <div className="step" key={i}><i style={{ background: `#${network.routes[s.route!].color}`, color: `#${network.routes[s.route!].textColor}` }}>{network.routes[s.route!].shortName}</i><p>{profile.trips[s.trip!][1] || network.stops[s.to].name}<small>{formatTime(s.dep!)}–{formatTime(s.arr!)} · do {network.stops[s.to].name}</small></p></div>)}</div>; }
 
 function marker(letter: string, color: string) { const el = document.createElement("div"); el.className = "letterMarker"; el.textContent = letter; el.style.background = color; return new maplibregl.Marker({ element: el }); }
+async function loadSchedule(url: string): Promise<ScheduleData> { const encoded = await fetch(url).then(r => r.text()); const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0)); const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")); return JSON.parse(await new Response(stream).text()); }
 function toLocation(f: PhotonFeature): Location { const p = f.properties, street = [p.street ?? p.name, p.housenumber].filter(Boolean).join(" "); return { name: [street, p.postcode, p.city].filter(Boolean).join(", "), lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }; }
 function parseTime(value: string) { const [h, m] = value.split(":").map(Number); return h * 3600 + m * 60; }
 function formatTime(value: number) { const v = value % 86400; return `${String(Math.floor(v / 3600)).padStart(2, "0")}:${String(Math.floor((v % 3600) / 60)).padStart(2, "0")}`; }
