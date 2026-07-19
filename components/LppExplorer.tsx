@@ -2,154 +2,184 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { GeoJSONSource, Map as MapLibreMap, Marker } from "maplibre-gl";
-import type { NetworkData, RoutingData, Stop } from "@/lib/types";
+import type { DayProfile, NetworkData, Route, ScheduleData, Stop } from "@/lib/types";
+
+type Location = { name: string; lat: number; lon: number };
+type Mode = "reach" | "route" | "lines";
+type Target = "start" | "end";
+type DayKind = "weekday" | "saturday" | "sunday";
+type PhotonFeature = { geometry: { coordinates: [number, number] }; properties: { name?: string; street?: string; housenumber?: string; city?: string; postcode?: string } };
+type Pred = { kind: "access" | "walk" | "ride"; from: number; trip?: number; route?: number; dep?: number; arr?: number } | null;
+type JourneyStep = { kind: "walk" | "ride"; from?: number; to: number; trip?: number; route?: number; dep?: number; arr?: number; minutes: number };
+type Journey = { arrival: number; duration: number; steps: JourneyStep[]; destinationStop: number };
 
 const TIMES = [15, 30, 45] as const;
-type Home = { name: string; lat: number; lon: number };
-type PhotonFeature = { geometry: { coordinates: [number, number] }; properties: { name?: string; street?: string; housenumber?: string; city?: string; postcode?: string } };
+const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
 export default function LppExplorer() {
-  const mapNode = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<MapLibreMap | null>(null);
-  const homeMarker = useRef<Marker | null>(null);
-  const [data, setData] = useState<NetworkData | null>(null);
-  const [routing, setRouting] = useState<RoutingData | null>(null);
-  const [reachableCount, setReachableCount] = useState(0);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Home[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [searchMessage, setSearchMessage] = useState("");
-  const [minutes, setMinutes] = useState<(typeof TIMES)[number]>(30);
-  const [home, setHome] = useState<Home | null>(null);
+  const mapNode = useRef<HTMLDivElement>(null), mapRef = useRef<MapLibreMap | null>(null);
+  const startMarker = useRef<Marker | null>(null), endMarker = useRef<Marker | null>(null);
+  const [network, setNetwork] = useState<NetworkData | null>(null);
+  const [schedule, setSchedule] = useState<ScheduleData | null>(null);
+  const [mode, setMode] = useState<Mode>("reach");
+  const [target, setTarget] = useState<Target>("start");
+  const [start, setStart] = useState<Location | null>(null), [end, setEnd] = useState<Location | null>(null);
+  const [startQuery, setStartQuery] = useState(""), [endQuery, setEndQuery] = useState("");
+  const [results, setResults] = useState<Location[]>([]), [searching, setSearching] = useState(false), [searchMessage, setSearchMessage] = useState("");
+  const [minutes, setMinutes] = useState<(typeof TIMES)[number]>(30), [time, setTime] = useState("08:00"), [dayKind, setDayKind] = useState<DayKind>("weekday");
+  const [reachTimes, setReachTimes] = useState<Float64Array | null>(null), [journey, setJourney] = useState<Journey | null>(null);
+  const [selectedRoute, setSelectedRoute] = useState(0), [direction, setDirection] = useState(0);
 
   useEffect(() => {
-    const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-    Promise.all([
-      fetch(`${basePath}/data/lpp-network.json`).then(r => r.json()),
-      fetch(`${basePath}/data/lpp-routing.json`).then(r => r.json()),
-    ]).then(([network, graph]) => { setData(network); setRouting(graph); });
+    const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+    Promise.all([fetch(`${base}/data/lpp-network.json`).then(r => r.json()), fetch(`${base}/data/lpp-schedule.json`).then(r => r.json())]).then(([n, s]) => { setNetwork(n); setSchedule(s); });
   }, []);
 
   useEffect(() => {
     if (!mapNode.current || mapRef.current) return;
-    const map = new maplibregl.Map({
-      container: mapNode.current,
-      style: { version: 8, sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, attribution: "© OpenStreetMap contributors" } }, layers: [{ id: "osm", type: "raster", source: "osm" }] },
-      center: [14.5058, 46.0569], zoom: 11.5, attributionControl: false,
-    });
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
-    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
-    map.on("click", e => {
-      const layers = ["stops", "clusters"].filter(id => map.getLayer(id));
-      if (layers.length && map.queryRenderedFeatures(e.point, { layers }).length) return;
-      chooseHome({ name: "Izbrana točka na zemljevidu", lon: e.lngLat.lng, lat: e.lngLat.lat });
-    });
-    mapRef.current = map;
+    const map = new maplibregl.Map({ container: mapNode.current, style: { version: 8, sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, attribution: "© OpenStreetMap contributors" } }, layers: [{ id: "osm", type: "raster", source: "osm" }] }, center: [14.5058, 46.0569], zoom: 11.4, attributionControl: false });
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right"); map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left"); mapRef.current = map;
     return () => { map.remove(); mapRef.current = null; };
   }, []);
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !data) return;
-    const addStops = () => {
-      if (map.getSource("stops")) return;
-      map.addSource("stops", { type: "geojson", data: toGeoJson(data.stops), cluster: true, clusterMaxZoom: 14, clusterRadius: 38 });
-      map.addLayer({ id: "clusters", type: "circle", source: "stops", filter: ["has", "point_count"], paint: { "circle-color": "#25d88a", "circle-radius": ["step", ["get", "point_count"], 16, 20, 20, 80, 25], "circle-stroke-color": "#08221a", "circle-stroke-width": 2 } });
-      map.addLayer({ id: "cluster-count", type: "symbol", source: "stops", filter: ["has", "point_count"], layout: { "text-field": ["get", "point_count_abbreviated"], "text-size": 12 }, paint: { "text-color": "#08221a" } });
-      map.addLayer({ id: "stops", type: "circle", source: "stops", filter: ["!", ["has", "point_count"]], paint: { "circle-color": "#fff", "circle-radius": 6, "circle-stroke-color": "#00a968", "circle-stroke-width": 3 } });
-      map.on("click", "stops", e => { const f = e.features?.[0]; if (f) new maplibregl.Popup({ offset: 10 }).setLngLat((f.geometry as GeoJSON.Point).coordinates as [number, number]).setText(f.properties?.name ?? "Postajališče LPP").addTo(map); });
-      map.on("click", "clusters", async e => { const feature = map.queryRenderedFeatures(e.point, { layers: ["clusters"] })[0]; const source = map.getSource("stops") as GeoJSONSource; const zoom = await source.getClusterExpansionZoom(Number(feature.properties?.cluster_id)); map.easeTo({ center: (feature.geometry as GeoJSON.Point).coordinates as [number, number], zoom }); });
-    };
-    map.loaded() ? addStops() : map.once("load", addStops);
-  }, [data]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !data || !routing || !home) { setReachableCount(0); return; }
-    const times = calculateReach(data.stops, routing, home, minutes * 60);
-    const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
-    times.forEach((time, index) => { if (Number.isFinite(time) && time <= minutes * 60) features.push({ type: "Feature", geometry: { type: "Point", coordinates: [data.stops[index].lon, data.stops[index].lat] }, properties: { time: Math.round(time / 60), name: data.stops[index].name } }); });
-    setReachableCount(features.length);
-    const geojson: GeoJSON.FeatureCollection<GeoJSON.Point> = { type: "FeatureCollection", features };
+    const map = mapRef.current; if (!map || !network) return;
     const draw = () => {
-      const source = map.getSource("reachable") as GeoJSONSource | undefined;
-      if (source) source.setData(geojson);
-      else {
-        map.addSource("reachable", { type: "geojson", data: geojson });
-        map.addLayer({ id: "reach-heat", type: "heatmap", source: "reachable", paint: { "heatmap-weight": ["interpolate", ["linear"], ["get", "time"], 0, 1, minutes, 0.25], "heatmap-intensity": 1.15, "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 10, 28, 15, 55], "heatmap-opacity": 0.5, "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"], 0, "rgba(37,216,138,0)", 0.3, "rgba(37,216,138,.35)", 0.65, "rgba(0,169,104,.55)", 1, "rgba(8,34,26,.7)"] } });
-        map.addLayer({ id: "reach-points", type: "circle", source: "reachable", paint: { "circle-radius": 8, "circle-color": ["interpolate", ["linear"], ["get", "time"], 0, "#08221a", minutes, "#25d88a"], "circle-stroke-color": "#fff", "circle-stroke-width": 2 } });
-      }
+      if (map.getSource("stops")) return;
+      map.addSource("stops", { type: "geojson", data: stopGeoJson(network.stops), cluster: true, clusterMaxZoom: 14, clusterRadius: 38 });
+      map.addLayer({ id: "clusters", type: "circle", source: "stops", filter: ["has", "point_count"], paint: { "circle-color": "#25d88a", "circle-radius": ["step", ["get", "point_count"], 15, 20, 19, 80, 23], "circle-stroke-color": "#08221a", "circle-stroke-width": 2 } });
+      map.addLayer({ id: "cluster-count", type: "symbol", source: "stops", filter: ["has", "point_count"], layout: { "text-field": ["get", "point_count_abbreviated"], "text-size": 11 }, paint: { "text-color": "#08221a" } });
+      map.addLayer({ id: "stops", type: "circle", source: "stops", filter: ["!", ["has", "point_count"]], paint: { "circle-color": "#fff", "circle-radius": 5, "circle-stroke-color": "#00a968", "circle-stroke-width": 2 } });
+      for (const id of ["reach-lines", "reachable", "plan", "line-view"]) map.addSource(id, { type: "geojson", data: EMPTY });
+      map.addLayer({ id: "reach-line-layer", type: "line", source: "reach-lines", paint: { "line-color": ["get", "color"], "line-width": 2.5, "line-opacity": .42 } });
+      map.addLayer({ id: "reachable-layer", type: "circle", source: "reachable", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 5, 15, 10], "circle-color": ["step", ["get", "time"], "#08221a", 15, "#00a968", 30, "#f0b429"], "circle-stroke-color": "#fff", "circle-stroke-width": 1.5, "circle-opacity": .9 } });
+      map.addLayer({ id: "plan-shadow", type: "line", source: "plan", paint: { "line-color": "#fff", "line-width": 8, "line-opacity": .9 } });
+      map.addLayer({ id: "plan-layer", type: "line", source: "plan", paint: { "line-color": ["get", "color"], "line-width": 5 } });
+      map.addLayer({ id: "line-view-layer", type: "line", source: "line-view", paint: { "line-color": ["get", "color"], "line-width": 6, "line-opacity": .9 } });
+      map.on("click", "stops", e => { const f = e.features?.[0]; if (f) new maplibregl.Popup({ offset: 10 }).setLngLat((f.geometry as GeoJSON.Point).coordinates as [number, number]).setText(f.properties?.name ?? "Postajališče LPP").addTo(map); });
+      map.on("click", "clusters", async e => { const f = map.queryRenderedFeatures(e.point, { layers: ["clusters"] })[0]; const source = map.getSource("stops") as GeoJSONSource; map.easeTo({ center: (f.geometry as GeoJSON.Point).coordinates as [number, number], zoom: await source.getClusterExpansionZoom(Number(f.properties?.cluster_id)) }); });
     };
     map.loaded() ? draw() : map.once("load", draw);
-  }, [data, routing, home, minutes]);
+  }, [network]);
 
   useEffect(() => {
-    if (home || query.trim().length < 3) { setResults([]); setSearchMessage(""); return; }
-    const controller = new AbortController();
-    const timer = window.setTimeout(async () => {
-      setSearching(true);
-      setSearchMessage("");
-      try {
-        const params = new URLSearchParams({ q: `${query}, Ljubljana, Slovenia`, limit: "6", lat: "46.0569", lon: "14.5058", bbox: "13.9,45.7,15.1,46.4" });
-        const response = await fetch(`https://photon.komoot.io/api/?${params}`, { signal: controller.signal });
-        if (!response.ok) throw new Error(`Geocoding failed: ${response.status}`);
-        const json = await response.json() as { features: PhotonFeature[] };
-        const places = json.features.map(toHome).filter(place => place.name);
-        setResults(places);
-        setSearchMessage(places.length ? "" : "Naslova nisem našel. Poskusi brez šumnikov ali dodaj poštno številko.");
-      } catch (error) { if (!(error instanceof DOMException && error.name === "AbortError")) { setResults([]); setSearchMessage("Iskanje naslovov trenutno ni dosegljivo. Poskusi znova čez trenutek."); } }
-      finally { setSearching(false); }
-    }, 350);
-    return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [query, home]);
+    const map = mapRef.current; if (!map) return;
+    const click = (e: maplibregl.MapMouseEvent) => { if (mode === "lines") return; const layers = ["stops", "clusters"].filter(id => map.getLayer(id)); if (layers.length && map.queryRenderedFeatures(e.point, { layers }).length) return; place(target, { name: "Izbrana točka", lat: e.lngLat.lat, lon: e.lngLat.lng }); };
+    map.on("click", click); return () => { map.off("click", click); };
+  }, [target, mode]);
 
-  const nearest = useMemo(() => home && data ? [...data.stops].sort((a, b) => distance(home, a) - distance(home, b)).slice(0, 3) : [], [home, data]);
+  const activeQuery = target === "start" ? startQuery : endQuery;
+  useEffect(() => {
+    if (activeQuery.trim().length < 3) { setResults([]); setSearchMessage(""); return; }
+    const controller = new AbortController(); const timer = window.setTimeout(async () => {
+      setSearching(true); setSearchMessage("");
+      try { const p = new URLSearchParams({ q: `${activeQuery}, Ljubljana, Slovenia`, limit: "6", lat: "46.0569", lon: "14.5058", bbox: "13.9,45.7,15.1,46.4" }); const response = await fetch(`https://photon.komoot.io/api/?${p}`, { signal: controller.signal }); if (!response.ok) throw new Error(); const json = await response.json() as { features: PhotonFeature[] }; const places = json.features.map(toLocation).filter(x => x.name); setResults(places); if (!places.length) setSearchMessage("Ni zadetkov. Naslov izberi s klikom na zemljevid."); }
+      catch (error) { if (!(error instanceof DOMException && error.name === "AbortError")) setSearchMessage("Iskanje ni dosegljivo. Lokacijo izberi na zemljevidu."); } finally { setSearching(false); }
+    }, 400); return () => { clearTimeout(timer); controller.abort(); };
+  }, [activeQuery, target]);
 
-  function chooseHome(place: Home) {
-    setHome(place); setQuery(place.name); setResults([]); homeMarker.current?.remove();
-    if (mapRef.current) homeMarker.current = new maplibregl.Marker({ color: "#08221a" }).setLngLat([place.lon, place.lat]).setPopup(new maplibregl.Popup({ offset: 25 }).setText("Tvoj začetni naslov")).addTo(mapRef.current);
-    mapRef.current?.flyTo({ center: [place.lon, place.lat], zoom: 15 });
+  const profile = schedule?.profiles[dayKind]; const departure = parseTime(time);
+  useEffect(() => {
+    if (!network || !profile || !start || mode !== "reach") { setReachTimes(null); return; }
+    setReachTimes(runCsa(network.stops, profile, start, departure, minutes * 60).earliest);
+  }, [network, profile, start, departure, minutes, mode]);
+
+  useEffect(() => {
+    const map = mapRef.current; if (!map || !network || !schedule) return;
+    toggleStops(map, mode === "lines" || (mode === "reach" && !start));
+    setSource(map, "plan", EMPTY); setSource(map, "line-view", EMPTY); setSource(map, "reachable", EMPTY); setSource(map, "reach-lines", EMPTY);
+    if (mode === "reach" && reachTimes && profile) {
+      const features: GeoJSON.Feature<GeoJSON.Point>[] = []; const routeSet = new Set<number>();
+      reachTimes.forEach((arrival, i) => { if (Number.isFinite(arrival) && arrival - departure <= minutes * 60) features.push({ type: "Feature", geometry: { type: "Point", coordinates: [network.stops[i].lon, network.stops[i].lat] }, properties: { time: Math.round((arrival - departure) / 60), name: network.stops[i].name } }); });
+      for (const c of profile.connections) if (reachTimes[c[2]] <= c[0] && c[0] <= departure + minutes * 60) routeSet.add(c[5]);
+      setSource(map, "reachable", { type: "FeatureCollection", features }); setSource(map, "reach-lines", shapeFeatures(schedule, network.routes, profile.patterns.filter(p => routeSet.has(p[0]))));
+    }
+    if (mode === "lines") {
+      const patterns = profile?.patterns.filter(p => p[0] === selectedRoute) ?? []; const chosen = patterns[direction] ? [patterns[direction]] : patterns.slice(0, 1); setSource(map, "line-view", shapeFeatures(schedule, network.routes, chosen));
+    }
+  }, [mode, reachTimes, network, schedule, profile, departure, minutes, start, selectedRoute, direction]);
+
+  function place(which: Target, location: Location) {
+    const map = mapRef.current; setResults([]); setSearchMessage("");
+    if (which === "start") { setStart(location); setStartQuery(location.name); startMarker.current?.remove(); if (map) startMarker.current = marker("A", "#08221a").setLngLat([location.lon, location.lat]).addTo(map); if (mode === "route") setTarget("end"); }
+    else { setEnd(location); setEndQuery(location.name); endMarker.current?.remove(); if (map) endMarker.current = marker("B", "#d97706").setLngLat([location.lon, location.lat]).addTo(map); }
+    map?.flyTo({ center: [location.lon, location.lat], zoom: 14 });
   }
 
+  function findJourney() {
+    if (!network || !profile || !start || !end) return; const result = planJourney(network.stops, profile, start, end, departure); setJourney(result);
+    if (result && schedule) { const features = journeyFeatures(result, start, end, network, schedule, profile); setSource(mapRef.current, "plan", features); const coords = features.features.flatMap(f => f.geometry.type === "LineString" ? f.geometry.coordinates : []); if (coords.length) mapRef.current?.fitBounds(coords.reduce((b, c) => b.extend(c as [number, number]), new maplibregl.LngLatBounds(coords[0] as [number, number], coords[0] as [number, number])), { padding: 70 }); }
+  }
+
+  const reachable = useMemo(() => reachTimes && network ? network.stops.map((stop, i) => ({ stop, time: reachTimes[i] - departure })).filter(x => Number.isFinite(x.time) && x.time <= minutes * 60).sort((a, b) => b.time - a.time) : [], [reachTimes, network, departure, minutes]);
+  const linePatterns = profile?.patterns.filter(p => p[0] === selectedRoute) ?? [], activePattern = linePatterns[direction] ?? linePatterns[0];
+
   return <main>
-    <section className="panel">
-      <div className="brand"><span className="brandMark">D</span><div><strong>Doseg Ljubljana</strong><small>Javni prevoz na enem zemljevidu</small></div></div>
-      <h1>Kako daleč prideš<br />z LPP?</h1>
-      <p className="lead">Vpiši naslov bivanja ali klikni zemljevid. Doseg temelji na uradnem voznem redu LPP.</p>
-      <label className="searchLabel">Naslov bivanja</label>
-      <div className="search"><span>⌕</span><input value={query} onChange={e => { setQuery(e.target.value); setHome(null); setSearchMessage(""); }} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); setQuery(value => `${value.trim()} `); } }} placeholder="npr. Slovenska cesta 1" autoComplete="street-address" /></div>
-      {searching && <p className="searchHint">Iščem naslov …</p>}
-      {!searching && searchMessage && <p className="searchHint">{searchMessage}</p>}
-      {results.length > 0 && <div className="results">{results.map((place, i) => <button key={`${place.lon}-${place.lat}-${i}`} onClick={() => chooseHome(place)}>{place.name}</button>)}</div>}
-      <label className="searchLabel timeLabel">Čas poti</label>
-      <div className="timeButtons">{TIMES.map(t => <button className={minutes === t ? "active" : ""} key={t} onClick={() => setMinutes(t)}>{t}<small> min</small></button>)}</div>
-      <div className="status"><span className="statusDot" /><div><strong>{home ? `${reachableCount} dosegljivih postajališč` : "Vpiši naslov ali klikni zemljevid"}</strong><p>{home ? `Načrtovani doseg v ${minutes} minutah. Najbližje: ${nearest.map(s => s.name).join(", ")}.` : "Izračun vključuje hojo, vožnjo in prestope po voznem redu."}</p></div></div>
-      <div className="facts"><span><strong>{data?.stops.length ?? "…"}</strong> postajališč</span><span><strong>{data?.routes.length ?? "…"}</strong> linij</span></div>
-      <p className="source">Načrtovani časi brez zamud v živo · LPP GTFS · OpenStreetMap</p>
+    <section className="panel appPanel">
+      <div className="brand"><span className="brandMark">D</span><div><strong>Doseg Ljubljana</strong><small>Po voznem redu LPP</small></div></div>
+      <nav className="tabs"><button className={mode === "reach" ? "active" : ""} onClick={() => { setMode("reach"); setTarget("start"); }}>Doseg</button><button className={mode === "route" ? "active" : ""} onClick={() => { setMode("route"); setTarget(start ? "end" : "start"); }}>Pot A–B</button><button className={mode === "lines" ? "active" : ""} onClick={() => setMode("lines")}>Linije</button></nav>
+
+      {mode !== "lines" && <>
+        <h1>{mode === "reach" ? "Kam lahko prideš?" : "Načrtuj pot"}</h1>
+        <LocationInput label="Začetek" badge="A" value={startQuery} active={target === "start"} onFocus={() => setTarget("start")} onChange={value => { setStartQuery(value); setStart(null); }} placeholder="Naslov ali klik na zemljevid" />
+        {mode === "route" && <LocationInput label="Cilj" badge="B" value={endQuery} active={target === "end"} onFocus={() => setTarget("end")} onChange={value => { setEndQuery(value); setEnd(null); }} placeholder="Kam želiš?" />}
+        {(searching || searchMessage || results.length > 0) && <div className="searchResults">{searching && <p>Iščem …</p>}{searchMessage && <p>{searchMessage}</p>}{results.map((r, i) => <button key={`${r.lon}-${r.lat}-${i}`} onClick={() => place(target, r)}>{r.name}</button>)}</div>}
+        <div className="controls"><label>Odhod<input type="time" value={time} onChange={e => setTime(e.target.value)} /></label><label>Dan<select value={dayKind} onChange={e => setDayKind(e.target.value as DayKind)}><option value="weekday">Delavnik</option><option value="saturday">Sobota</option><option value="sunday">Nedelja</option></select></label></div>
+      </>}
+
+      {mode === "reach" && <>
+        <div className="timeButtons">{TIMES.map(t => <button className={minutes === t ? "active" : ""} key={t} onClick={() => setMinutes(t)}>{t}<small> min</small></button>)}</div>
+        <div className="legend"><span><i className="l15" />do 15 min</span><span><i className="l30" />15–30</span><span><i className="l45" />30–45</span></div>
+        <div className="summary"><strong>{start ? `${reachable.length} dosegljivih postajališč` : "Izberi začetno lokacijo"}</strong><p>{start ? `Odhod ob ${time}, ${dayLabel(dayKind).toLowerCase()}.` : "Vpiši naslov ali klikni zemljevid."}</p></div>
+        {reachable.length > 0 && <div className="destinationList"><h3>Najdlje dosegljivo</h3>{reachable.slice(0, 5).map(x => <button key={x.stop.id} onClick={() => mapRef.current?.flyTo({ center: [x.stop.lon, x.stop.lat], zoom: 14 })}><span>{x.stop.name}</span><strong>{Math.round(x.time / 60)} min</strong></button>)}</div>}
+      </>}
+
+      {mode === "route" && <>
+        <button className="primary" disabled={!start || !end} onClick={findJourney}>Poišči povezave</button>
+        {journey ? <JourneyCard journey={journey} network={network!} profile={profile!} /> : <div className="emptyCard">Izberi A in B. Lokaciji lahko določiš tudi zaporednima klikoma na zemljevid.</div>}
+      </>}
+
+      {mode === "lines" && network && <>
+        <h1>Linije LPP</h1><label className="fieldLabel">Izberi linijo<select className="lineSelect" value={selectedRoute} onChange={e => { setSelectedRoute(Number(e.target.value)); setDirection(0); }}>{network.routes.map((r, i) => <option value={i} key={r.id}>Linija {r.shortName}</option>)}</select></label>
+        <div className="directionButtons">{linePatterns.map((p, i) => <button className={direction === i ? "active" : ""} key={`${p[1]}-${i}`} onClick={() => setDirection(i)}>{p[1] || `Smer ${i + 1}`}</button>)}</div>
+        {activePattern && <div className="stopList"><h3>{activePattern[3].length} postajališč</h3>{activePattern[3].map((s, i) => <button key={`${s}-${i}`} onClick={() => mapRef.current?.flyTo({ center: [network.stops[s].lon, network.stops[s].lat], zoom: 15 })}><i style={{ background: `#${network.routes[selectedRoute].color}` }}>{i + 1}</i>{network.stops[s].name}</button>)}</div>}
+      </>}
+      <p className="source">Načrtovani časi, brez zamud v živo · LPP GTFS · OpenStreetMap</p>
     </section>
-    <section className="mapWrap"><div ref={mapNode} className="map" /><div className="beta">MVP · dejanski podatki LPP</div></section>
+    <section className="mapWrap"><div ref={mapNode} className="map" /><div className="mapHint">Klik na zemljevid izbere {target === "start" ? "začetek A" : "cilj B"}</div></section>
   </main>;
 }
 
-function toHome(feature: PhotonFeature): Home { const p = feature.properties; const street = [p.street ?? p.name, p.housenumber].filter(Boolean).join(" "); return { name: [street, p.postcode, p.city].filter(Boolean).join(", "), lon: feature.geometry.coordinates[0], lat: feature.geometry.coordinates[1] }; }
-function distance(a: Home, b: Stop) { const x = (b.lon - a.lon) * Math.cos((a.lat * Math.PI) / 180); const y = b.lat - a.lat; return x * x + y * y; }
-function toGeoJson(stops: Stop[]): GeoJSON.FeatureCollection<GeoJSON.Point> { return { type: "FeatureCollection", features: stops.map(s => ({ type: "Feature", geometry: { type: "Point", coordinates: [s.lon, s.lat] }, properties: s })) }; }
+function LocationInput({ label, badge, value, active, onFocus, onChange, placeholder }: { label: string; badge: string; value: string; active: boolean; onFocus: () => void; onChange: (v: string) => void; placeholder: string }) { return <label className={`locationField ${active ? "active" : ""}`}><span>{badge}</span><div><small>{label}</small><input value={value} onFocus={onFocus} onChange={e => onChange(e.target.value)} placeholder={placeholder} /></div></label>; }
+function JourneyCard({ journey, network, profile }: { journey: Journey; network: NetworkData; profile: DayProfile }) { return <div className="journeyCard"><div className="journeyHead"><div><strong>{Math.round(journey.duration / 60)} min</strong><small>prihod {formatTime(journey.arrival)}</small></div><span>{journey.steps.filter(s => s.kind === "ride").length} odsekov</span></div>{journey.steps.map((s, i) => s.kind === "walk" ? <div className="step walk" key={i}><i>↟</i><p>{i === journey.steps.length - 1 ? "Hoja do cilja" : `Hoja do ${network.stops[s.to].name}`}<small>{s.minutes} min</small></p></div> : <div className="step" key={i}><i style={{ background: `#${network.routes[s.route!].color}`, color: `#${network.routes[s.route!].textColor}` }}>{network.routes[s.route!].shortName}</i><p>{profile.trips[s.trip!][1] || network.stops[s.to].name}<small>{formatTime(s.dep!)}–{formatTime(s.arr!)} · do {network.stops[s.to].name}</small></p></div>)}</div>; }
 
-function meters(a: { lat: number; lon: number }, b: { lat: number; lon: number }) { const lat = ((a.lat + b.lat) / 2) * Math.PI / 180; const x = (b.lon - a.lon) * 111320 * Math.cos(lat); const y = (b.lat - a.lat) * 110540; return Math.hypot(x, y); }
+function marker(letter: string, color: string) { const el = document.createElement("div"); el.className = "letterMarker"; el.textContent = letter; el.style.background = color; return new maplibregl.Marker({ element: el }); }
+function toLocation(f: PhotonFeature): Location { const p = f.properties, street = [p.street ?? p.name, p.housenumber].filter(Boolean).join(" "); return { name: [street, p.postcode, p.city].filter(Boolean).join(", "), lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }; }
+function parseTime(value: string) { const [h, m] = value.split(":").map(Number); return h * 3600 + m * 60; }
+function formatTime(value: number) { const v = value % 86400; return `${String(Math.floor(v / 3600)).padStart(2, "0")}:${String(Math.floor((v % 3600) / 60)).padStart(2, "0")}`; }
+function dayLabel(day: DayKind) { return day === "weekday" ? "Delavnik" : day === "saturday" ? "Sobota" : "Nedelja"; }
+function meters(a: { lat: number; lon: number }, b: { lat: number; lon: number }) { const lat = ((a.lat + b.lat) / 2) * Math.PI / 180; return Math.hypot((b.lon - a.lon) * 111320 * Math.cos(lat), (b.lat - a.lat) * 110540); }
+function stopGeoJson(stops: Stop[]): GeoJSON.FeatureCollection<GeoJSON.Point> { return { type: "FeatureCollection", features: stops.map(s => ({ type: "Feature", geometry: { type: "Point", coordinates: [s.lon, s.lat] }, properties: s })) }; }
+function setSource(map: MapLibreMap | null, id: string, data: GeoJSON.GeoJSON) { (map?.getSource(id) as GeoJSONSource | undefined)?.setData(data); }
+function toggleStops(map: MapLibreMap, visible: boolean) { for (const id of ["clusters", "cluster-count", "stops"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visible ? "visible" : "none"); }
+function shapeFeatures(schedule: ScheduleData, routes: Route[], patterns: DayProfile["patterns"]): GeoJSON.FeatureCollection<GeoJSON.LineString> { const seen = new Set<string>(); return { type: "FeatureCollection", features: patterns.flatMap(p => { if (!p[2] || seen.has(p[2]) || !schedule.shapes[p[2]]) return []; seen.add(p[2]); return [{ type: "Feature" as const, geometry: { type: "LineString" as const, coordinates: schedule.shapes[p[2]] }, properties: { color: `#${routes[p[0]].color}` } }]; }) }; }
 
-function calculateReach(stops: Stop[], routing: RoutingData, home: Home, limit: number) {
-  const routeStates = routing.routeIds.length + 1, size = stops.length * routeStates;
-  const best = new Float64Array(size); best.fill(Infinity); const result = new Float64Array(stops.length); result.fill(Infinity);
-  const walking = stops.map(() => [] as Array<[number, number]>);
-  for (let a = 0; a < stops.length; a++) for (let b = a + 1; b < stops.length; b++) { const d = meters(stops[a], stops[b]); if (d <= 320) { const t = d / 1.3 + 25; walking[a].push([b, t]); walking[b].push([a, t]); } }
-  const heap: Array<[number, number, number]> = [];
-  const push = (item: [number, number, number]) => { heap.push(item); let i = heap.length - 1; while (i) { const p = (i - 1) >> 1; if (heap[p][0] <= item[0]) break; heap[i] = heap[p]; i = p; } heap[i] = item; };
-  const pop = () => { const top = heap[0], last = heap.pop()!; if (heap.length) { let i = 0; while (true) { let c = i * 2 + 1; if (c >= heap.length) break; if (c + 1 < heap.length && heap[c + 1][0] < heap[c][0]) c++; if (heap[c][0] >= last[0]) break; heap[i] = heap[c]; i = c; } heap[i] = last; } return top; };
-  stops.forEach((stop, node) => { const d = meters(home, stop); if (d <= 1300) { const time = d / 1.3; const state = node * routeStates; best[state] = time; push([time, node, -1]); } });
-  while (heap.length) {
-    const [time, node, route] = pop(); const state = node * routeStates + route + 1; if (time !== best[state] || time > limit) continue; result[node] = Math.min(result[node], time);
-    for (const [to, ride, nextRoute] of routing.edges[node]) { const next = time + ride + (route === nextRoute ? 0 : 240); const s = to * routeStates + nextRoute + 1; if (next < best[s] && next <= limit) { best[s] = next; push([next, to, nextRoute]); } }
-    for (const [to, walk] of walking[node]) { const next = time + walk, s = to * routeStates; if (next < best[s] && next <= limit) { best[s] = next; push([next, to, -1]); } }
-  }
-  return result;
+function walkingGraph(stops: Stop[]) { const graph = stops.map(() => [] as Array<[number, number]>); for (let a = 0; a < stops.length; a++) for (let b = a + 1; b < stops.length; b++) { const d = meters(stops[a], stops[b]); if (d <= 280) { const t = d / 1.3 + 20; graph[a].push([b, t]); graph[b].push([a, t]); } } return graph; }
+function runCsa(stops: Stop[], profile: DayProfile, origin: Location, departure: number, limit = 3 * 3600) {
+  const earliest = new Float64Array(stops.length); earliest.fill(Infinity); const pred: Pred[] = Array(stops.length).fill(null), walk = walkingGraph(stops), tripReached = new Uint8Array(profile.trips.length);
+  stops.forEach((s, i) => { const d = meters(origin, s); if (d <= 1400) { earliest[i] = departure + d / 1.3; pred[i] = { kind: "access", from: -1 }; } });
+  const relaxWalk = (from: number) => { for (const [to, duration] of walk[from]) if (earliest[from] + duration < earliest[to]) { earliest[to] = earliest[from] + duration; pred[to] = { kind: "walk", from }; } };
+  earliest.forEach((v, i) => { if (Number.isFinite(v)) relaxWalk(i); });
+  for (const [dep, arr, from, to, trip, route] of profile.connections) { if (dep < departure || dep > departure + limit) continue; if (!tripReached[trip] && earliest[from] + 75 > dep) continue; tripReached[trip] = 1; if (arr < earliest[to]) { earliest[to] = arr; pred[to] = { kind: "ride", from, trip, route, dep, arr }; relaxWalk(to); } }
+  return { earliest, pred };
 }
+function planJourney(stops: Stop[], profile: DayProfile, origin: Location, destination: Location, departure: number): Journey | null {
+  const { earliest, pred } = runCsa(stops, profile, origin, departure, 5 * 3600); let best = Infinity, destinationStop = -1;
+  stops.forEach((s, i) => { const d = meters(destination, s); if (d <= 1800 && earliest[i] + d / 1.3 < best) { best = earliest[i] + d / 1.3; destinationStop = i; } }); if (destinationStop < 0) return null;
+  const reversed: JourneyStep[] = [{ kind: "walk", from: destinationStop, to: destinationStop, minutes: Math.max(1, Math.round(meters(destination, stops[destinationStop]) / 1.3 / 60)) }]; let node = destinationStop, guard = 0;
+  while (pred[node] && guard++ < 200) { const p = pred[node]!; if (p.kind === "access") { reversed.push({ kind: "walk", to: node, minutes: Math.max(1, Math.round((earliest[node] - departure) / 60)) }); break; } reversed.push({ kind: p.kind, from: p.from, to: node, trip: p.trip, route: p.route, dep: p.dep, arr: p.arr, minutes: Math.max(1, Math.round(((p.arr ?? earliest[node]) - (p.dep ?? earliest[p.from])) / 60)) }); node = p.from; }
+  const raw = reversed.reverse(), steps: JourneyStep[] = [];
+  for (const s of raw) { const last = steps.at(-1); if (s.kind === "ride" && last?.kind === "ride" && last.trip === s.trip) { last.to = s.to; last.arr = s.arr; last.minutes = Math.round(((last.arr ?? 0) - (last.dep ?? 0)) / 60); } else if (!(s.kind === "walk" && s.minutes === 0)) steps.push({ ...s }); }
+  return { arrival: best, duration: best - departure, steps, destinationStop };
+}
+function journeyFeatures(journey: Journey, start: Location, end: Location, network: NetworkData, schedule: ScheduleData, profile: DayProfile): GeoJSON.FeatureCollection<GeoJSON.LineString> { const features: GeoJSON.Feature<GeoJSON.LineString>[] = []; let previous: [number, number] = [start.lon, start.lat]; for (const step of journey.steps) { const stop = network.stops[step.to], to: [number, number] = [stop.lon, stop.lat]; if (step.kind === "ride" && step.trip !== undefined) { const shape = schedule.shapes[profile.trips[step.trip][2]]; if (shape) features.push({ type: "Feature", geometry: { type: "LineString", coordinates: shape }, properties: { color: `#${network.routes[step.route!].color}` } }); } else features.push({ type: "Feature", geometry: { type: "LineString", coordinates: [previous, to] }, properties: { color: "#66756f" } }); previous = to; } features.push({ type: "Feature", geometry: { type: "LineString", coordinates: [previous, [end.lon, end.lat]] }, properties: { color: "#66756f" } }); return { type: "FeatureCollection", features }; }
