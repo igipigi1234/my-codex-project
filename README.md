@@ -11,6 +11,8 @@ npm run dev
 
 Odpri `http://localhost:3000`.
 
+Objavljena različica: [igipigi1234.github.io/my-codex-project](https://igipigi1234.github.io/my-codex-project/)
+
 ## Trenutno stanje
 
 - interaktivni zemljevid Ljubljane
