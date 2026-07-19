@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { readFileSync, writeFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 
 const zip = process.argv[2];
-const output = process.argv[3] ?? "public/data/lpp-schedule.json";
+const output = process.argv[3] ?? "public/data/lpp-schedule.json.gz.b64";
 if (!zip) throw new Error("Uporaba: node scripts/build-lpp-schedule.mjs <feed.zip> [output.json]");
 
 async function eachLine(entry, callback) {
@@ -58,7 +59,8 @@ await eachLine("shapes.txt", row => { if (!usedShapes.has(row.shape_id)) return;
 const shapes = {};
 for (const [id, points] of rawShapes) { points.sort((a, b) => a[2] - b[2]); const sampled = points.filter((_, i) => i % 4 === 0).map(([lon, lat]) => [lon, lat]); const last = points.at(-1); if (last && sampled.at(-1)?.[0] !== last[0]) sampled.push([last[0], last[1]]); shapes[id] = sampled; }
 
-writeFileSync(output, JSON.stringify({ generatedAt: new Date().toISOString(), profiles, shapes }));
+const json = JSON.stringify({ generatedAt: new Date().toISOString(), profiles, shapes });
+writeFileSync(output, gzipSync(Buffer.from(json), { level: 9 }).toString("base64"));
 for (const [name, profile] of Object.entries(profiles)) console.log(`${name}: ${profile.trips.length} voženj, ${profile.connections.length} povezav, ${profile.patterns.length} vzorcev`);
 console.log(`Trase: ${Object.keys(shapes).length}; izhod: ${output}`);
 
