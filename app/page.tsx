@@ -1,5 +1,5 @@
-import LppExplorer from "@/components/LppExplorer";
+import SloveniaExplorer from "@/components/SloveniaExplorer";
 
 export default function Home() {
-  return <LppExplorer />;
+  return <SloveniaExplorer />;
 }
