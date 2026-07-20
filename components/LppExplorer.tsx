@@ -11,7 +11,7 @@ type DayKind = "weekday" | "saturday" | "sunday";
 type PhotonFeature = { geometry: { coordinates: [number, number] }; properties: { name?: string; street?: string; housenumber?: string; city?: string; postcode?: string } };
 type Pred = { kind: "access" | "walk" | "ride"; from: number; trip?: number; route?: number; dep?: number; arr?: number } | null;
 type JourneyStep = { kind: "walk" | "ride"; from?: number; to: number; trip?: number; route?: number; dep?: number; arr?: number; minutes: number };
-type Journey = { arrival: number; duration: number; steps: JourneyStep[]; destinationStop: number };
+type Journey = { departure: number; arrival: number; duration: number; steps: JourneyStep[]; destinationStop: number };
 
 const TIMES = [15, 30, 45] as const;
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -28,6 +28,8 @@ export default function LppExplorer() {
   const [results, setResults] = useState<Location[]>([]), [searching, setSearching] = useState(false), [searchMessage, setSearchMessage] = useState("");
   const [minutes, setMinutes] = useState<(typeof TIMES)[number]>(30), [time, setTime] = useState("08:00"), [dayKind, setDayKind] = useState<DayKind>("weekday");
   const [reachTimes, setReachTimes] = useState<Float64Array | null>(null), [journey, setJourney] = useState<Journey | null>(null);
+  const [journeyOptions, setJourneyOptions] = useState<Journey[]>([]), [routeSearched, setRouteSearched] = useState(false);
+  const [selectedReachStop, setSelectedReachStop] = useState<number | null>(null), [reachJourney, setReachJourney] = useState<Journey | null>(null);
   const [selectedRoute, setSelectedRoute] = useState(0), [direction, setDirection] = useState(0);
   const [selectedLineStop, setSelectedLineStop] = useState<number | null>(null);
 
@@ -77,15 +79,21 @@ export default function LppExplorer() {
   const profile = schedule?.profiles[dayKind]; const departure = parseTime(time);
   useEffect(() => {
     if (!network || !profile || !start || mode !== "reach") { setReachTimes(null); return; }
+    setSelectedReachStop(null); setReachJourney(null);
     setReachTimes(runCsa(network.stops, profile, start, departure, minutes * 60).earliest);
   }, [network, profile, start, departure, minutes, mode]);
+
+  useEffect(() => { setJourney(null); setJourneyOptions([]); setRouteSearched(false); }, [start, end, departure, profile]);
 
   useEffect(() => {
     const map = mapRef.current; if (!map || !network || !schedule) return;
     const render = () => {
       ensureOverlayLayers(map); toggleStops(map, mode === "lines" || (mode === "reach" && !start));
       for (const id of ["plan", "line-view", "transfer-lines", "selected-stop", "reachable", "reach-lines"]) setSource(map, id, EMPTY);
-      if (mode === "reach" && reachTimes && profile) {
+      if (mode === "reach" && reachJourney && selectedReachStop !== null && profile) {
+        const destination = network.stops[selectedReachStop], endLocation = { name: destination.name, lat: destination.lat, lon: destination.lon }, features = journeyFeatures(reachJourney, start!, endLocation, network, schedule, profile);
+        setSource(map, "plan", features); setSource(map, "selected-stop", { type: "Feature", geometry: { type: "Point", coordinates: [destination.lon, destination.lat] }, properties: { name: destination.name } }); fitFeatures(map, features, 70);
+      } else if (mode === "reach" && reachTimes && profile) {
         const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
         reachTimes.forEach((arrival, i) => { if (Number.isFinite(arrival) && arrival - departure <= minutes * 60) features.push({ type: "Feature", geometry: { type: "Point", coordinates: [network.stops[i].lon, network.stops[i].lat] }, properties: { time: Math.round((arrival - departure) / 60), name: network.stops[i].name } }); });
         setSource(map, "reachable", { type: "FeatureCollection", features }); setSource(map, "reach-lines", reachableConnectionFeatures(profile, reachTimes, departure, minutes * 60, network));
@@ -96,7 +104,7 @@ export default function LppExplorer() {
       }
     };
     map.isStyleLoaded() ? render() : map.once("load", render);
-  }, [mode, reachTimes, network, schedule, profile, departure, minutes, start, selectedRoute, direction, selectedLineStop]);
+  }, [mode, reachTimes, reachJourney, selectedReachStop, network, schedule, profile, departure, minutes, start, selectedRoute, direction, selectedLineStop]);
 
   function place(which: Target, location: Location) {
     const map = mapRef.current; setResults([]); setSearchMessage("");
@@ -106,11 +114,16 @@ export default function LppExplorer() {
   }
 
   function findJourney() {
-    if (!network || !profile || !start || !end) return; const result = planJourney(network.stops, profile, start, end, departure); setJourney(result);
-    if (result && schedule && mapRef.current) { const map = mapRef.current, features = journeyFeatures(result, start, end, network, schedule, profile); ensureOverlayLayers(map); setSource(map, "plan", features); fitFeatures(map, features, 70); }
+    if (!network || !profile || !start || !end) return; const options: Journey[] = [], signatures = new Set<string>();
+    for (const offset of [0, 300, 600, 900, 1200, 1800]) { const result = planJourney(network.stops, profile, start, end, departure + offset); if (!result) continue; const signature = `${result.arrival}-${result.steps.filter(s => s.kind === "ride").map(s => s.route).join("-")}`; if (!signatures.has(signature)) { signatures.add(signature); options.push(result); } if (options.length === 3) break; }
+    setJourney(null); setJourneyOptions(options); setRouteSearched(true); if (mapRef.current) setSource(mapRef.current, "plan", EMPTY);
   }
 
-  const reachable = useMemo(() => reachTimes && network ? network.stops.map((stop, i) => ({ stop, time: reachTimes[i] - departure })).filter(x => Number.isFinite(x.time) && x.time <= minutes * 60).sort((a, b) => b.time - a.time) : [], [reachTimes, network, departure, minutes]);
+  function chooseJourney(result: Journey) { if (!network || !profile || !start || !end || !schedule || !mapRef.current) return; setJourney(result); const map = mapRef.current, features = journeyFeatures(result, start, end, network, schedule, profile); ensureOverlayLayers(map); setSource(map, "plan", features); fitFeatures(map, features, 70); }
+
+  function chooseReachDestination(stopIndex: number) { if (!network || !profile || !start) return; const stop = network.stops[stopIndex], destination = { name: stop.name, lat: stop.lat, lon: stop.lon }, result = planJourney(network.stops, profile, start, destination, departure); if (result) { setSelectedReachStop(stopIndex); setReachJourney(result); } }
+
+  const reachable = useMemo(() => reachTimes && network ? network.stops.map((stop, i) => ({ stop, index: i, time: reachTimes[i] - departure })).filter(x => Number.isFinite(x.time) && x.time <= minutes * 60).sort((a, b) => b.time - a.time) : [], [reachTimes, network, departure, minutes]);
   const linePatterns = profile?.patterns.filter(p => p[0] === selectedRoute) ?? [], activePattern = linePatterns[direction] ?? linePatterns[0];
   const transferRoutes = useMemo(() => { if (!network || !profile || selectedLineStop === null) return [] as number[]; const selected = network.stops[selectedLineStop], found = new Set<number>(); for (const p of profile.patterns) if (p[0] !== selectedRoute && p[3].some(i => meters(selected, network.stops[i]) <= 140)) found.add(p[0]); return [...found].sort((a, b) => network.routes[a].shortName.localeCompare(network.routes[b].shortName, undefined, { numeric: true })); }, [network, profile, selectedLineStop, selectedRoute]);
 
@@ -134,13 +147,12 @@ export default function LppExplorer() {
       {mode === "reach" && <>
         <div className="timeButtons">{TIMES.map(t => <button className={minutes === t ? "active" : ""} key={t} onClick={() => setMinutes(t)}>{t}<small> min</small></button>)}</div>
         <div className="legend"><span><i className="l15" />do 15 min</span><span><i className="l30" />15–30</span><span><i className="l45" />30–45</span></div>
-        <div className="summary"><strong>{start ? `${reachable.length} dosegljivih postajališč` : "Izberi začetno lokacijo"}</strong><p>{start ? `Odhod ob ${time}, ${dayLabel(dayKind).toLowerCase()}.` : "Vpiši naslov ali klikni zemljevid."}</p></div>
-        {reachable.length > 0 && <div className="destinationList"><h3>Najdlje dosegljivo</h3>{reachable.slice(0, 5).map(x => <button key={x.stop.id} onClick={() => mapRef.current?.flyTo({ center: [x.stop.lon, x.stop.lat], zoom: 14 })}><span>{x.stop.name}</span><strong>{Math.round(x.time / 60)} min</strong></button>)}</div>}
+        {reachJourney && selectedReachStop !== null && network && profile ? <div className="selectedJourney"><button className="backButton" onClick={() => { setReachJourney(null); setSelectedReachStop(null); }}>← Nazaj na celoten doseg</button><div className="summary"><strong>{network.stops[selectedReachStop].name}</strong><p>Izbrana povezava iz začetne lokacije.</p></div><JourneyCard journey={reachJourney} network={network} profile={profile} /></div> : <><div className="summary"><strong>{start ? `${reachable.length} dosegljivih postajališč` : "Izberi začetno lokacijo"}</strong><p>{start ? `Odhod ob ${time}, ${dayLabel(dayKind).toLowerCase()}.` : "Vpiši naslov ali klikni zemljevid."}</p></div>{reachable.length > 0 && <div className="destinationList"><h3>Najdlje dosegljivo</h3>{reachable.slice(0, 5).map(x => <button key={x.stop.id} onClick={() => chooseReachDestination(x.index)}><span>{x.stop.name}</span><strong>{Math.round(x.time / 60)} min</strong></button>)}</div>}</>}
       </>}
 
       {mode === "route" && <>
         <button className="primary" disabled={!start || !end} onClick={findJourney}>Poišči povezave</button>
-        {journey ? <JourneyCard journey={journey} network={network!} profile={profile!} /> : <div className="emptyCard">Izberi A in B. Lokaciji lahko določiš tudi zaporednima klikoma na zemljevid.</div>}
+        {journey ? <><button className="backButton" onClick={() => { setJourney(null); if (mapRef.current) setSource(mapRef.current, "plan", EMPTY); }}>← Druge povezave</button><JourneyCard journey={journey} network={network!} profile={profile!} /></> : journeyOptions.length ? <div className="journeyOptions"><h3>Izberi povezavo</h3>{journeyOptions.map((option, i) => <JourneyOption key={`${option.arrival}-${i}`} journey={option} network={network!} onClick={() => chooseJourney(option)} />)}</div> : routeSearched ? <div className="emptyCard">Za izbrani čas nisem našel povezave.</div> : <div className="emptyCard">Izberi A in B. Lokaciji lahko določiš tudi zaporednima klikoma na zemljevid.</div>}
       </>}
 
       {mode === "lines" && network && <>
@@ -156,7 +168,11 @@ export default function LppExplorer() {
 }
 
 function LocationInput({ label, badge, value, active, onFocus, onChange, placeholder }: { label: string; badge: string; value: string; active: boolean; onFocus: () => void; onChange: (v: string) => void; placeholder: string }) { return <label className={`locationField ${active ? "active" : ""}`}><span>{badge}</span><div><small>{label}</small><input value={value} onFocus={onFocus} onChange={e => onChange(e.target.value)} placeholder={placeholder} /></div></label>; }
-function JourneyCard({ journey, network, profile }: { journey: Journey; network: NetworkData; profile: DayProfile }) { return <div className="journeyCard"><div className="journeyHead"><div><strong>{Math.round(journey.duration / 60)} min</strong><small>prihod {formatTime(journey.arrival)}</small></div><span>{journey.steps.filter(s => s.kind === "ride").length} odsekov</span></div>{journey.steps.map((s, i) => s.kind === "walk" ? <div className="step walk" key={i}><i>↟</i><p>{i === journey.steps.length - 1 ? "Hoja do cilja" : `Hoja do ${network.stops[s.to].name}`}<small>{s.minutes} min</small></p></div> : <div className="step" key={i}><i style={{ background: `#${network.routes[s.route!].color}`, color: `#${network.routes[s.route!].textColor}` }}>{network.routes[s.route!].shortName}</i><p>{profile.trips[s.trip!][1] || network.stops[s.to].name}<small>{formatTime(s.dep!)}–{formatTime(s.arr!)} · do {network.stops[s.to].name}</small></p></div>)}</div>; }
+function JourneyOption({ journey, network, onClick }: { journey: Journey; network: NetworkData; onClick: () => void }) { const routes = journey.steps.filter(s => s.kind === "ride" && s.route !== undefined); return <button className="journeyOption" onClick={onClick}><div><strong>{Math.round(journey.duration / 60)} min</strong><small>{formatTime(journey.departure)}–{formatTime(journey.arrival)}</small></div><span>{routes.map((s, i) => <i key={`${s.route}-${i}`} style={{ background: `#${network.routes[s.route!].color}`, color: `#${network.routes[s.route!].textColor}` }}>{network.routes[s.route!].shortName}</i>)}</span><b>›</b></button>; }
+function JourneyCard({ journey, network, profile }: { journey: Journey; network: NetworkData; profile: DayProfile }) {
+  const [showSchedule, setShowSchedule] = useState(false);
+  return <div className="journeyCard"><div className="journeyHead"><div><strong>{Math.round(journey.duration / 60)} min</strong><small>odhod {formatTime(journey.departure)} · prihod {formatTime(journey.arrival)}</small></div><span>{journey.steps.filter(s => s.kind === "ride").length} odsekov</span></div>{journey.steps.map((s, i) => s.kind === "walk" ? <div className="step walk" key={i}><i>↟</i><p>{i === journey.steps.length - 1 ? "Hoja do cilja" : `Hoja do ${network.stops[s.to].name}`}<small>{s.minutes} min</small></p></div> : <div className="step" key={i}><i style={{ background: `#${network.routes[s.route!].color}`, color: `#${network.routes[s.route!].textColor}` }}>{network.routes[s.route!].shortName}</i><p>{profile.trips[s.trip!][1] || network.stops[s.to].name}<small>{formatTime(s.dep!)}–{formatTime(s.arr!)} · do {network.stops[s.to].name}</small></p></div>)}<button className="scheduleToggle" onClick={() => setShowSchedule(value => !value)}>{showSchedule ? "Skrij vozni red" : "Prikaži vozni red poti"}</button>{showSchedule && <div className="tripSchedule">{journey.steps.filter(s => s.kind === "ride").map((step, i) => <div className="scheduleRide" key={`${step.trip}-${i}`}><h4><i style={{ background: `#${network.routes[step.route!].color}`, color: `#${network.routes[step.route!].textColor}` }}>{network.routes[step.route!].shortName}</i>{profile.trips[step.trip!][1]}</h4>{tripStopTimes(step, profile).map(([stop, value], row) => <div className="scheduleRow" key={`${stop}-${row}`}><time>{formatTime(value)}</time><span>{network.stops[stop].name}</span></div>)}</div>)}</div>}</div>;
+}
 
 function marker(letter: string, color: string) { const el = document.createElement("div"); el.className = "letterMarker"; el.textContent = letter; el.style.background = color; return new maplibregl.Marker({ element: el }); }
 async function loadSchedule(url: string): Promise<ScheduleData> { const encoded = await fetch(url).then(r => r.text()); const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0)); const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")); return JSON.parse(await new Response(stream).text()); }
@@ -198,7 +214,8 @@ function planJourney(stops: Stop[], profile: DayProfile, origin: Location, desti
   while (pred[node] && guard++ < 200) { const p = pred[node]!; if (p.kind === "access") { reversed.push({ kind: "walk", to: node, minutes: Math.max(1, Math.round((earliest[node] - departure) / 60)) }); break; } reversed.push({ kind: p.kind, from: p.from, to: node, trip: p.trip, route: p.route, dep: p.dep, arr: p.arr, minutes: Math.max(1, Math.round(((p.arr ?? earliest[node]) - (p.dep ?? earliest[p.from])) / 60)) }); node = p.from; }
   const raw = reversed.reverse(), steps: JourneyStep[] = [];
   for (const s of raw) { const last = steps.at(-1); if (s.kind === "ride" && last?.kind === "ride" && last.trip === s.trip) { last.to = s.to; last.arr = s.arr; last.minutes = Math.round(((last.arr ?? 0) - (last.dep ?? 0)) / 60); } else if (!(s.kind === "walk" && s.minutes === 0)) steps.push({ ...s }); }
-  return { arrival: best, duration: best - departure, steps, destinationStop };
+  return { departure, arrival: best, duration: best - departure, steps, destinationStop };
 }
+function tripStopTimes(step: JourneyStep, profile: DayProfile): Array<[number, number]> { if (step.trip === undefined || step.from === undefined) return []; const connections = profile.connections.filter(c => c[4] === step.trip); const rows: Array<[number, number]> = []; let active = false; for (const [dep, arr, from, to] of connections) { if (!active && from === step.from) { active = true; rows.push([from, dep]); } if (active) { rows.push([to, arr]); if (to === step.to) break; } } return rows; }
 function journeyFeatures(journey: Journey, start: Location, end: Location, network: NetworkData, schedule: ScheduleData, profile: DayProfile): GeoJSON.FeatureCollection<GeoJSON.LineString> { const features: GeoJSON.Feature<GeoJSON.LineString>[] = []; let previous: [number, number] = [start.lon, start.lat]; for (const step of journey.steps) { const stop = network.stops[step.to], to: [number, number] = [stop.lon, stop.lat]; if (step.kind === "ride" && step.trip !== undefined && step.from !== undefined) { const shape = schedule.shapes[profile.trips[step.trip][2]], fromStop = network.stops[step.from]; if (shape) features.push({ type: "Feature", geometry: { type: "LineString", coordinates: sliceShape(shape, [fromStop.lon, fromStop.lat], to) }, properties: { color: `#${network.routes[step.route!].color}` } }); } else features.push({ type: "Feature", geometry: { type: "LineString", coordinates: [previous, to] }, properties: { color: "#66756f" } }); previous = to; } features.push({ type: "Feature", geometry: { type: "LineString", coordinates: [previous, [end.lon, end.lat]] }, properties: { color: "#66756f" } }); return { type: "FeatureCollection", features }; }
 function sliceShape(shape: Array<[number, number]>, from: [number, number], to: [number, number]) { const nearest = (point: [number, number]) => { let best = 0, value = Infinity; shape.forEach((p, i) => { const d = (p[0] - point[0]) ** 2 + (p[1] - point[1]) ** 2; if (d < value) { value = d; best = i; } }); return best; }; const a = nearest(from), b = nearest(to); const part = a <= b ? shape.slice(a, b + 1) : shape.slice(b, a + 1).reverse(); return part.length >= 2 ? part : [from, to]; }
