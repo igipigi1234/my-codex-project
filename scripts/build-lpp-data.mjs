@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 const zip = process.argv[2];
@@ -32,8 +32,18 @@ function parseCsv(text) {
 
 const stops = parseCsv(readEntry("stops.txt")).map(s => ({ id: s.stop_id, name: s.stop_name, lat: Number(s.stop_lat), lon: Number(s.stop_lon) })).filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lon));
 const routes = parseCsv(readEntry("routes.txt")).map(r => ({ id: r.route_id, shortName: r.route_short_name, longName: r.route_long_name, color: r.route_color || "00A968", textColor: r.route_text_color || "FFFFFF" }));
+const serviceDates = parseCsv(readEntry("calendar_dates.txt")).filter(row => row.exception_type === "1").map(row => row.date).sort();
 const generatedAt = new Date();
-const payload = { generatedAt: generatedAt.toISOString(), sourceUpdatedAt: generatedAt.toISOString().slice(0, 10), sourceUrl: "https://data.lpp.si/api/gtfs/feed.zip", stops, routes };
+const isoDate = value => `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+const payload = {
+  generatedAt: generatedAt.toISOString(),
+  retrievedAt: statSync(zip).mtime.toISOString(),
+  validFrom: serviceDates.length ? isoDate(serviceDates[0]) : undefined,
+  validThrough: serviceDates.length ? isoDate(serviceDates.at(-1)) : undefined,
+  sourceUrl: "https://data.lpp.si/api/gtfs/feed.zip",
+  stops,
+  routes,
+};
 
 mkdirSync(dirname(output), { recursive: true });
 writeFileSync(output, JSON.stringify(payload));
