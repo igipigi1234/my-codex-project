@@ -1,5 +1,6 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./globals.css";
+import "./extra.css";
 
 export const metadata = {
   title: "Doseg Ljubljana",
