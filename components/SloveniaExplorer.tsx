@@ -305,9 +305,10 @@ export default function SloveniaExplorer() {
     setActiveDeparture(null);
     try {
       const response = await stopDepartures(start, date, time, preferences);
-      setDepartures(response.stopTimes.filter(value => !value.cancelled && !value.tripCancelled));
+      const values = normalizeDepartures(response.stopTimes, start);
+      setDepartures(values);
       setStatus("idle");
-      setStatusMessage(response.stopTimes.length ? "" : "V naslednjih treh urah ni odhodov.");
+      setStatusMessage(values.length ? "" : "Ni najdenih prihodnjih odhodov.");
     } catch (error) {
       setDepartures([]);
       setStatus("error");
@@ -385,7 +386,16 @@ export default function SloveniaExplorer() {
 
   const reachableByDistance = useMemo(() => {
     if (!start) return [];
-    return [...reachables].map(item => ({ ...item, distance: distanceKm(start, item.place) })).sort((a, b) => b.distance - a.distance).slice(0, 12);
+    const sorted = [...reachables]
+      .map(item => ({ ...item, distance: distanceKm(start, item.place) }))
+      .sort((a, b) => b.distance - a.distance);
+    return sorted.filter((item, index, values) => {
+      const name = item.place.name.toLocaleLowerCase("sl").replace(/\s+/g, " ").trim();
+      return !values.slice(0, index).some(previous =>
+        previous.place.name.toLocaleLowerCase("sl").replace(/\s+/g, " ").trim() === name
+        && distanceKm(previous.place, item.place) < 0.6
+      );
+    }).slice(0, 12);
   }, [reachables, start]);
   const optionLabels = useMemo(() => labelItineraries(itineraries), [itineraries]);
   const commonCompare = useMemo(() => compareOverlap(compareA, compareB), [compareA, compareB]);
@@ -599,7 +609,7 @@ function DeparturesPanel(props: DeparturesPanelProps) {
     <TransportPreferences value={props.preferences} setValue={props.setPreferences} />
     <button className="primary" disabled={props.status === "loading" || !selectedTransitModes(props.preferences).length} onClick={props.execute}>{props.status === "loading" ? "Nalagam …" : "Pokaži odhode"}</button>
     <StatusBox status={props.status} message={props.statusMessage} />
-    {props.departures.length > 0 && <><div className="sectionHeading"><h2>Naslednji odhodi</h2><small>do 700 m stran</small></div><div className="departureBoard">{props.departures.map((departure, index) => <button key={`${departure.tripId}-${index}`} type="button" onClick={() => props.choose(departure)}>
+    {props.departures.length > 0 && <><div className="sectionHeading"><h2>Naslednji odhodi</h2><small>do 500 m stran · največ 40 voženj</small></div><div className="departureBoard">{props.departures.map((departure, index) => <button key={`${departure.tripId}-${index}`} type="button" onClick={() => props.choose(departure)}>
       <time>{formatTime(departure.place.departure ?? departure.place.scheduledDeparture)}</time>
       <RouteBadge leg={{ mode: departure.mode, routeShortName: departure.routeShortName, routeColor: undefined } as TransitLeg} />
       <span><strong>{departure.headsign || departure.tripTo.name}</strong><small>{departure.place.name} · {departure.agencyName}{departure.realTime ? " · v živo" : ""}</small></span><b>›</b>
@@ -638,14 +648,14 @@ function JourneyOption({ journey, active, label, choose }: { journey: Itinerary;
   return <button type="button" className={`journeyOption ${active ? "active" : ""}`} onClick={choose}>
     <span className="optionTop"><small className="optionLabel">{label}</small><strong>{Math.round(journey.duration / 60)} min</strong><small>{formatTime(journey.startTime)}–{formatTime(journey.endTime)}</small></span>
     <span className="optionRoute">{transitLegs(journey).slice(0, 4).map((leg, index) => <RouteBadge key={`${leg.tripId}-${index}`} leg={leg} />)}<span className="chevron">›</span></span>
-    <span className="optionStats"><span>{journey.transfers} prestopov</span><span>{Math.round(stats.walkMinutes)} min hoje</span><span>{stats.realtime ? "delno v živo" : "vozni red"}</span></span>
+    <span className="optionStats"><span>{transferLabel(journey.transfers)}</span><span>{Math.round(stats.walkMinutes)} min hoje</span><span>{stats.realtime ? "delno v živo" : "vozni red"}</span></span>
   </button>;
 }
 
 function JourneyCard({ journey, fullTrip = false }: { journey: Itinerary; fullTrip?: boolean }) {
   const stats = itineraryStats(journey);
   return <article className="journeyCard">
-    <header className="journeyHead"><div><small>{fullTrip ? "Celotna vožnja" : "Načrt potovanja"}</small><strong>{Math.round(journey.duration / 60)} min</strong><small>{formatTime(journey.startTime)}–{formatTime(journey.endTime)}</small></div><div className="journeyMetrics"><span>{journey.transfers} prestopov</span><span>{Math.round(stats.walkMinutes)} min hoje</span>{stats.realtime && <span className="livePill">● v živo</span>}</div></header>
+    <header className="journeyHead"><div><small>{fullTrip ? "Celotna vožnja" : "Načrt potovanja"}</small><strong>{Math.round(journey.duration / 60)} min</strong><small>{formatTime(journey.startTime)}–{formatTime(journey.endTime)}</small></div><div className="journeyMetrics"><span>{transferLabel(journey.transfers)}</span><span>{Math.round(stats.walkMinutes)} min hoje</span>{stats.realtime && <span className="livePill">● v živo</span>}</div></header>
     <div className="timeline">{journey.legs.map((leg, index) => <JourneyLeg key={`${leg.tripId ?? leg.mode}-${index}`} leg={leg} />)}</div>
   </article>;
 }
@@ -761,6 +771,24 @@ function normalizeReachables(values: ReachablePlace[]): ReachablePlace[] {
   return [...unique.values()].sort((a, b) => a.duration - b.duration || a.place.name.localeCompare(b.place.name, "sl"));
 }
 
+function normalizeDepartures(values: StopTime[], origin: TransitPlace): StopTime[] {
+  const unique = new Map<string, StopTime>();
+  for (const value of values ?? []) {
+    if (value.cancelled || value.tripCancelled || !value.place) continue;
+    const key = value.tripId || `${value.routeId}|${value.headsign}|${value.place.departure ?? value.place.scheduledDeparture}`;
+    const previous = unique.get(key);
+    if (!previous || distanceKm(origin, value.place) < distanceKm(origin, previous.place)) unique.set(key, value);
+  }
+  return [...unique.values()]
+    .sort((a, b) => departureTimestamp(a) - departureTimestamp(b))
+    .slice(0, 40);
+}
+
+function departureTimestamp(value: StopTime): number {
+  const parsed = Date.parse(value.place.departure ?? value.place.scheduledDeparture ?? "");
+  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
 function compareKey(value: ReachablePlace): string {
   return `${value.place.name.toLocaleLowerCase("sl").replace(/\s+/g, " ").trim()}|${value.place.lat.toFixed(3)}|${value.place.lon.toFixed(3)}`;
 }
@@ -787,6 +815,14 @@ function labelItineraries(values: Itinerary[]): Map<Itinerary, string> {
 function itineraryStats(journey: Itinerary) {
   const walking = journey.legs.filter(leg => leg.mode === "WALK");
   return { walkMinutes: walking.reduce((sum, leg) => sum + leg.duration, 0) / 60, walkDistance: walking.reduce((sum, leg) => sum + (leg.distance ?? 0), 0), realtime: journey.legs.some(leg => leg.realTime) };
+}
+
+function transferLabel(count: number): string {
+  if (count === 0) return "brez prestopa";
+  if (count === 1) return "1 prestop";
+  if (count === 2) return "2 prestopa";
+  if (count === 3 || count === 4) return `${count} prestopi`;
+  return `${count} prestopov`;
 }
 
 function transitLegs(journey: Itinerary): TransitLeg[] { return journey.legs.filter(leg => leg.mode !== "WALK"); }
