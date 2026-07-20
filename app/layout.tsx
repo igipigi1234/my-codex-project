@@ -1,10 +1,10 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./globals.css";
-import "./extra.css";
 
 export const metadata = {
   title: "Doseg Ljubljana",
-  description: "Raziskovalnik dostopnosti z javnim potniškim prometom v Ljubljani",
+  description: "Doseg, načrtovanje poti, vozni redi in primerjava dostopnosti z LPP v Ljubljani",
+  applicationName: "Doseg Ljubljana",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
