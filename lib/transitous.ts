@@ -1,4 +1,9 @@
+import proj4 from "proj4";
+
 export const TRANSITOUS_API = "https://api.transitous.org";
+export const GURS_ADDRESS_API = "https://ipi.eprostor.gov.si/wfs-si-gurs-rn/ogc/features/collections/SI.GURS.RN%3AREGISTER_NASLOVOV/items";
+
+const SLOVENIA_D96_TM = "+proj=tmerc +lat_0=0 +lon_0=15 +k=0.9999 +x_0=500000 +y_0=-5000000 +ellps=GRS80 +units=m +no_defs";
 
 export type TransitMode =
   | "WALK" | "BUS" | "COACH" | "RAIL" | "HIGHSPEED_RAIL"
@@ -76,6 +81,24 @@ export type GeocodeMatch = {
   country?: string;
   areas?: Array<{ name: string; adminLevel: number; default?: boolean }>;
   modes?: TransitMode[];
+  source?: "GURS" | "TRANSITOUS";
+};
+
+type GursAddressProperties = {
+  EID_NASLOV: string;
+  OBCINA_NAZIV: string;
+  NASELJE_NAZIV: string;
+  ULICA_NAZIV?: string | null;
+  POSTNI_OKOLIS_SIFRA: number;
+  POSTNI_OKOLIS_NAZIV: string;
+  HS_STEVILKA: number;
+  HS_DODATEK?: string | null;
+  E: number;
+  N: number;
+};
+
+type GursAddressResponse = {
+  features?: Array<{ properties: GursAddressProperties }>;
 };
 
 export type ReachablePlace = { place: TransitPlace; duration: number; k: number };
@@ -121,6 +144,22 @@ export function selectedTransitModes(preferences: PlannerPreferences): TransitMo
 }
 
 export async function geocodeSlovenia(text: string, signal?: AbortSignal): Promise<GeocodeMatch[]> {
+  const [official, transit] = await Promise.allSettled([
+    geocodeOfficialAddresses(text, signal),
+    geocodeTransitous(text, signal),
+  ]);
+  if (signal?.aborted) throw new DOMException("Poizvedba je bila prekinjena.", "AbortError");
+  const results = [
+    ...(official.status === "fulfilled" ? official.value : []),
+    ...(transit.status === "fulfilled" ? transit.value : []),
+  ];
+  return results
+    .filter(result => result.country === "SI" || isInsideSlovenia(result))
+    .filter((result, index, all) => all.findIndex(other => placeKey(other) === placeKey(result)) === index)
+    .slice(0, 10);
+}
+
+async function geocodeTransitous(text: string, signal?: AbortSignal): Promise<GeocodeMatch[]> {
   const results = await apiGet<GeocodeMatch[]>("/api/v1/geocode", {
     text,
     place: "46.12,14.90",
@@ -128,10 +167,55 @@ export async function geocodeSlovenia(text: string, signal?: AbortSignal): Promi
     language: "sl",
     numResults: 12,
   }, signal);
-  return results
-    .filter(result => result.country === "SI" || isInsideSlovenia(result))
-    .filter((result, index, all) => all.findIndex(other => placeKey(other) === placeKey(result)) === index)
-    .slice(0, 8);
+  return results.map(result => ({ ...result, source: "TRANSITOUS" as const }));
+}
+
+async function geocodeOfficialAddresses(text: string, signal?: AbortSignal): Promise<GeocodeMatch[]> {
+  const filter = gursFilterForAddress(text);
+  if (!filter) return [];
+  const query = new URLSearchParams({ f: "json", limit: "12", filter, "filter-lang": "cql-text" });
+  const response = await fetchJson<GursAddressResponse>(`${GURS_ADDRESS_API}?${query}`, signal, 20_000);
+  return (response.features ?? []).map(feature => {
+    const address = feature.properties;
+    const [lon, lat] = gursToWgs84(address.E, address.N);
+    const street = address.ULICA_NAZIV || address.NASELJE_NAZIV;
+    const houseNumber = `${address.HS_STEVILKA}${address.HS_DODATEK ?? ""}`;
+    const postal = `${address.POSTNI_OKOLIS_SIFRA} ${address.POSTNI_OKOLIS_NAZIV}`;
+    return {
+      type: "ADDRESS" as const,
+      name: `${street} ${houseNumber}, ${postal}`,
+      id: `gurs:${address.EID_NASLOV}`,
+      lat,
+      lon,
+      street,
+      houseNumber,
+      zip: String(address.POSTNI_OKOLIS_SIFRA),
+      country: "SI",
+      areas: [{ name: address.OBCINA_NAZIV, adminLevel: 8, default: true }],
+      source: "GURS" as const,
+    };
+  }).filter(value => isInsideSlovenia(value));
+}
+
+export function gursFilterForAddress(text: string): string | null {
+  const normalized = text.trim().replace(/[,;]+/g, " ").replace(/\s+/g, " ");
+  const numberMatches = [...normalized.matchAll(/\b(\d{1,5})([\p{L}]?)\b/gu)];
+  const house = numberMatches.find(match => match[1].length !== 4 || Boolean(match[2]));
+  if (!house) return null;
+  const withoutHouse = `${normalized.slice(0, house.index)} ${normalized.slice((house.index ?? 0) + house[0].length)}`;
+  const terms = [...new Set((withoutHouse.match(/[\p{L}]{2,}/gu) ?? [])
+    .map(term => term.toLocaleLowerCase("sl"))
+    .filter(term => !["slovenija", "slovenia"].includes(term)))]
+    .slice(0, 6);
+  if (!terms.length) return null;
+  const fields = ["ULICA_NAZIV", "NASELJE_NAZIV", "POSTNI_OKOLIS_NAZIV", "OBCINA_NAZIV"];
+  const textFilters = terms.map(term => `(${fields.map(field => `${field} ILIKE '%${escapeCql(term)}%'`).join(" OR ")})`);
+  const suffix = house[2] ? ` AND HS_DODATEK ILIKE '${escapeCql(house[2])}'` : "";
+  return `ST_STANOVANJA IS NULL AND HS_STEVILKA = ${Number(house[1])}${suffix} AND ${textFilters.join(" AND ")}`;
+}
+
+export function gursToWgs84(easting: number, northing: number): [number, number] {
+  return proj4(SLOVENIA_D96_TM, "EPSG:4326", [easting, northing]) as [number, number];
 }
 
 export async function planTrip(
@@ -315,4 +399,26 @@ async function apiGet<T>(path: string, parameters: Record<string, unknown>, exte
     clearTimeout(timer);
     externalSignal?.removeEventListener("abort", abort);
   }
+}
+
+async function fetchJson<T>(url: string, externalSignal?: AbortSignal, timeoutMs = 45_000): Promise<T> {
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), timeoutMs);
+  const abort = () => timeout.abort();
+  externalSignal?.addEventListener("abort", abort, { once: true });
+  try {
+    const response = await fetch(url, { signal: timeout.signal });
+    if (!response.ok) throw new Error(`Storitev za naslove je vrnila napako ${response.status}.`);
+    return await response.json() as T;
+  } catch (error) {
+    if (timeout.signal.aborted) throw new DOMException("Poizvedba je bila prekinjena.", "AbortError");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abort);
+  }
+}
+
+function escapeCql(value: string): string {
+  return value.replaceAll("'", "''");
 }
