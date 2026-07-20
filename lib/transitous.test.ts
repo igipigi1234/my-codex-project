@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodePolyline, modeLabel, selectedTransitModes, sloveniaDateTime } from "./transitous";
+import { decodePolyline, gursFilterForAddress, gursToWgs84, modeLabel, selectedTransitModes, sloveniaDateTime } from "./transitous";
 
 describe("national transit helpers", () => {
   it("uses the Ljubljana summer and winter UTC offsets", () => {
@@ -23,5 +23,19 @@ describe("national transit helpers", () => {
     expect(modeLabel("BUS")).toBe("Avtobus");
     expect(modeLabel("REGIONAL_RAIL")).toBe("Vlak");
     expect(modeLabel("FUNICULAR")).toBe("Vzpenjača");
+  });
+
+  it("builds a safe GURS query for a complete Slovenian address", () => {
+    const filter = gursFilterForAddress("Radohova vas 9");
+    expect(filter).toContain("HS_STEVILKA = 9");
+    expect(filter).toContain("%radohova%");
+    expect(filter).toContain("%vas%");
+    expect(gursFilterForAddress("Radohova vas")).toBeNull();
+  });
+
+  it("converts official D96/TM address coordinates to GPS", () => {
+    const [lon, lat] = gursToWgs84(490154, 89296);
+    expect(lon).toBeCloseTo(14.8730113, 5);
+    expect(lat).toBeCloseTo(45.9434211, 5);
   });
 });
