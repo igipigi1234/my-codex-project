@@ -20,6 +20,7 @@ jobs:
           node scripts/build-lpp-data.mjs /tmp/lpp-feed.zip
           node scripts/build-lpp-routing.mjs /tmp/lpp-feed.zip
           node scripts/build-lpp-schedule.mjs /tmp/lpp-feed.zip
+          npm run check:data
       - name: Commit a changed timetable
         run: |
           if git diff --quiet; then exit 0; fi
