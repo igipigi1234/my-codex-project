@@ -16,7 +16,7 @@ Objavljena različica: [igipigi1234.github.io/my-codex-project](https://igipigi1
 - klik na odhod prikaže celotno linijo, vse postanke in predvidene čase
 - filtri za avtobus, vlak, druge oblike JPP, dostopnost brez ovir in prevoz kolesa
 - primerjava dosegljivosti dveh naslovov
-- naslovi, kraji in postaje iz nacionalnega geokodiranja, izbira na zemljevidu in trenutna lokacija
+- uradni hišni naslovi iz Registra naslovov GURS, kraji in postaje, izbira na zemljevidu in trenutna lokacija
 - deljive povezave, shranjena domača lokacija in visokokontrastni način
 
 ## Lokalni zagon
@@ -39,7 +39,8 @@ GitHub Pages pred vsako objavo izvede teste in produkcijski build.
 
 ## Podatki in omejitve
 
-- poti, vozni redi, odhodi in geokodiranje: [Transitous/MOTIS](https://transitous.org/) z odprtimi slovenskimi viri, med njimi NAP, LPP, Marprom, Nomago, mestni in lokalni GTFS viri
+- uradni hišni naslovi in centroidi stavb: [Register naslovov GURS](https://www.e-prostor.gov.si/podrocja/prostorske-enote-in-naslovi/register-naslovov/) prek javnega OGC API-ja
+- poti, vozni redi, odhodi, kraji in postaje: [Transitous/MOTIS](https://transitous.org/) z odprtimi slovenskimi viri, med njimi NAP, LPP, Marprom, Nomago, mestni in lokalni GTFS viri
 - pregled vseh virov in pogojev uporabe: [Transitous – Slovenia](https://transitous.org/sources/#slovenia)
 - osnovni zemljevid: OpenStreetMap in CARTO
 
