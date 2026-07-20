@@ -78,6 +78,7 @@ export default function LppExplorer() {
   const [direction, setDirection] = useState(0);
   const [selectedLineStop, setSelectedLineStop] = useState<number | null>(null);
   const [highContrast, setHighContrast] = useState(false);
+  const [mapError, setMapError] = useState("");
   const [savedHome, setSavedHome] = useState<Location | null>(null);
   const modeRef = useRef(mode);
   const targetRef = useRef(target);
@@ -163,17 +164,24 @@ export default function LppExplorer() {
 
   useEffect(() => {
     if (!mapNode.current || mapRef.current) return;
-    const map = new maplibregl.Map({
-      container: mapNode.current,
-      style: {
-        version: 8,
-        sources: { carto: { type: "raster", tiles: ["https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], tileSize: 256, attribution: "© OpenStreetMap contributors © CARTO" } },
-        layers: [{ id: "carto", type: "raster", source: "carto" }],
-      },
-      center: [14.5058, 46.0569],
-      zoom: 11.4,
-      attributionControl: false,
-    });
+    let map: MapLibreMap;
+    try {
+      map = new maplibregl.Map({
+        container: mapNode.current,
+        style: {
+          version: 8,
+          sources: { carto: { type: "raster", tiles: ["https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], tileSize: 256, attribution: "© OpenStreetMap contributors © CARTO" } },
+          layers: [{ id: "carto", type: "raster", source: "carto" }],
+        },
+        center: [14.5058, 46.0569],
+        zoom: 11.4,
+        attributionControl: false,
+      });
+      setMapError("");
+    } catch {
+      setMapError("Ta brskalnik ne podpira strojnega izrisa zemljevida. Iskalnik, povezave in vozni red ostajajo na voljo.");
+      return;
+    }
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
     mapRef.current = map;
@@ -546,7 +554,7 @@ export default function LppExplorer() {
 
       <footer className="source"><strong>Načrtovani podatki LPP</strong><span>Veljavnost {formatDate(schedule.validFrom ?? network.validFrom)}–{formatDate(schedule.validThrough ?? network.validThrough)}. Brez zamud in obvozov v živo.</span><details><summary>Metodologija in zasebnost</summary><p>Vozni red in trase so iz statičnega LPP GTFS. Začetna in končna hoja se preverita po OpenStreetMap prek BRouterja; ob nedosegljivosti se uporabi konservativna ocena. Vpisani naslov se zaradi iskanja pošlje storitvi Photon, koordinate za preverjanje hoje pa BRouterju. Naslov se ne shranjuje, razen če izbereš »Shrani kot dom«, ko ostane samo v tvojem brskalniku.</p></details></footer>
     </section>
-    <section className="mapWrap" aria-label="Zemljevid Ljubljane"><div ref={mapNode} className="map" /><div className="mapHint">{mode === "lines" ? "Izberi postajališče na trasi" : `Klik izbere ${target === "start" ? "začetek A" : "cilj B"}`}</div><div className="mapLegend" aria-hidden="true">{mode === "reach" ? <><span><i className="l15" /> do 15 min</span><span><i className="l30" /> 15–30</span><span><i className="l45" /> 30–45</span></> : mode === "compare" ? <><span><i className="compareA" /> naslov A</span><span><i className="compareB" /> naslov B</span><span><i className="compareBoth" /> oba</span></> : null}</div></section>
+    <section className="mapWrap" aria-label="Zemljevid Ljubljane"><div ref={mapNode} className="map" />{mapError && <div className="mapFallback" role="status"><span>▧</span><strong>Zemljevid na tej napravi ni na voljo</strong><p>{mapError}</p></div>}{!mapError && <><div className="mapHint">{mode === "lines" ? "Izberi postajališče na trasi" : `Klik izbere ${target === "start" ? "začetek A" : "cilj B"}`}</div><div className="mapLegend" aria-hidden="true">{mode === "reach" ? <><span><i className="l15" /> do 15 min</span><span><i className="l30" /> 15–30</span><span><i className="l45" /> 30–45</span></> : mode === "compare" ? <><span><i className="compareA" /> naslov A</span><span><i className="compareB" /> naslov B</span><span><i className="compareBoth" /> oba</span></> : null}</div></>}</section>
   </main>;
 }
 
