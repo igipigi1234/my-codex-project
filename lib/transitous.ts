@@ -201,12 +201,11 @@ export async function stopDepartures(
 ): Promise<StoptimesResponse> {
   return apiGet<StoptimesResponse>("/api/v6/stoptimes", {
     center: `${place.lat},${place.lon}`,
-    radius: 700,
+    radius: 500,
     time: sloveniaDateTime(date, time),
     arriveBy: false,
     direction: "LATER",
     n: 40,
-    window: 10800,
     fetchStops: true,
     mode: selectedTransitModes(preferences),
     language: ["sl"],
