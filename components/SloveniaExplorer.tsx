@@ -416,7 +416,11 @@ export default function SloveniaExplorer() {
   return (
     <main className={highContrast ? "contrast" : ""}>
       <a className="skipLink" href="#content">Preskoči na vsebino</a>
-      <aside className="panel" id="content">
+      <aside className="panel" id="content" onKeyDown={event => {
+        if (event.key !== "Enter" || !suggestions[0] || !(event.target instanceof HTMLInputElement) || event.target.type !== "text") return;
+        event.preventDefault();
+        place(target, matchToPlace(suggestions[0]));
+      }}>
         <div className="appPanel">
           <header className="appHeader">
             <div className="brand"><span className="brandMark">S</span><span><strong>Doseg Slovenija</strong><small>Vsi javni prevozi na enem mestu</small></span></div>
