@@ -251,7 +251,7 @@ export default function LppExplorer() {
         const response = await fetch(`https://photon.komoot.io/api/?${params}`, { signal: controller.signal });
         if (!response.ok) throw new Error();
         const json = await response.json() as { features: PhotonFeature[] };
-        const places = json.features.map(toLocation).filter(value => value.name);
+        const places = [...new Map(json.features.map(toLocation).filter(value => value.name).map(value => [value.name.toLocaleLowerCase("sl"), value])).values()];
         setResults(places);
         if (!places.length) setSearchMessage("Ni zadetkov. Lokacijo lahko izbereš na zemljevidu.");
       } catch (error) {
@@ -302,6 +302,17 @@ export default function LppExplorer() {
 
   const linePatterns = useMemo(() => profile?.patterns.filter(pattern => pattern[0] === selectedRoute) ?? [], [profile, selectedRoute]);
   const activePattern = linePatterns[direction] ?? linePatterns[0];
+  const activeRouteIndices = useMemo(() => {
+    if (!profile || !network) return [] as number[];
+    return [...new Set(profile.patterns.map(pattern => pattern[0]))].sort((a, b) => network.routes[a].shortName.localeCompare(network.routes[b].shortName, "sl", { numeric: true }));
+  }, [profile, network]);
+  useEffect(() => {
+    if (activeRouteIndices.length && !activeRouteIndices.includes(selectedRoute)) {
+      setSelectedRoute(activeRouteIndices[0]);
+      setDirection(0);
+      setSelectedLineStop(null);
+    }
+  }, [activeRouteIndices, selectedRoute]);
   const transferRoutes = useMemo(() => {
     if (!network || !profile || selectedLineStop === null) return [] as Array<{ route: number; distance: number }>;
     const selected = network.stops[selectedLineStop];
@@ -527,7 +538,7 @@ export default function LppExplorer() {
 
       {mode === "lines" && <>
         <span className="eyebrow">Trase, postaje in odhodi</span><h1>Linije LPP</h1>
-        <label className="fieldLabel">Izberi linijo<select className="lineSelect" value={selectedRoute} onChange={event => { setSelectedRoute(Number(event.target.value)); setDirection(0); setSelectedLineStop(null); }}>{network.routes.map((route, index) => <option value={index} key={route.id}>Linija {route.shortName} · {route.longName}</option>)}</select></label>
+        <label className="fieldLabel">Izberi linijo<select className="lineSelect" value={selectedRoute} onChange={event => { setSelectedRoute(Number(event.target.value)); setDirection(0); setSelectedLineStop(null); }}>{activeRouteIndices.map(index => { const route = network.routes[index]; return <option value={index} key={route.id}>Linija {route.shortName}{route.longName ? ` · ${route.longName}` : ""}</option>; })}</select></label>
         <div className="directionButtons" aria-label="Smer linije">{linePatterns.map((pattern, index) => <button className={direction === index ? "active" : ""} key={`${pattern[1]}-${index}`} onClick={() => { setDirection(index); setSelectedLineStop(null); }}>{pattern[1] || `Smer ${index + 1}`}</button>)}</div>
         {selectedLineStop !== null && <div className="stopDetail"><div className="stopDetailHead"><span className="stopDot" style={{ background: `#${network.routes[selectedRoute].color}` }} /><div><strong>{network.stops[selectedLineStop].name}</strong><small>Naslednji načrtovani odhodi po {formatTime(departure)}</small></div></div><div className="departures">{selectedDepartures.length ? selectedDepartures.map(value => <div key={`${value.trip}-${value.time}`}><time>{formatTime(value.time)}</time><RouteBadge route={network.routes[value.route]} /><span>{value.headsign}</span></div>) : <p>Za izbrani čas ni več odhodov.</p>}</div><div className="stopActions"><button onClick={() => setStopAs("start")}>Začni tukaj</button><button onClick={() => setStopAs("end")}>Cilj tukaj</button></div>{transferRoutes.length > 0 && <div className="transferCard"><small>Prestopi v bližini</small><div>{transferRoutes.slice(0, 12).map(value => <button key={value.route} style={{ background: `#${network.routes[value.route].color}`, color: `#${network.routes[value.route].textColor}` }} onClick={() => { setSelectedRoute(value.route); setDirection(0); setSelectedLineStop(null); }} title={`${Math.max(1, Math.round(value.distance * 1.22 / 1.25 / 60))} min hoje`}>{network.routes[value.route].shortName}</button>)}</div></div>}</div>}
         {activePattern && <div className="stopList"><div className="sectionHeading"><h2>{activePattern[3].length} postajališč</h2><small>klik pokaže odhode</small></div>{activePattern[3].map((stopIndex, index) => <button className={selectedLineStop === stopIndex ? "selected" : ""} key={`${stopIndex}-${index}`} onClick={() => chooseLineStop(stopIndex)} aria-pressed={selectedLineStop === stopIndex}><i style={{ background: `#${network.routes[selectedRoute].color}`, color: `#${network.routes[selectedRoute].textColor}` }}>{index + 1}</i><span>{network.stops[stopIndex].name}</span></button>)}</div>}
