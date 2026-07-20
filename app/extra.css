@@ -1,0 +1,55 @@
+.stopList button {
+  border-radius: 8px;
+}
+
+.stopList button:hover,
+.stopList button.selected {
+  background: #e9f5ee;
+}
+
+.transferCard {
+  margin: 12px 0;
+  padding: 13px;
+  border-radius: 12px;
+  background: #e9f5ee;
+}
+
+.transferCard > strong,
+.transferCard > small {
+  display: block;
+}
+
+.transferCard > strong {
+  font-size: 13px;
+}
+
+.transferCard > small {
+  margin: 3px 0 9px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.transferCard div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.transferCard button {
+  min-width: 30px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.transferCard p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
