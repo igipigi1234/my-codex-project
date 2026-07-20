@@ -321,7 +321,7 @@ export default function SloveniaExplorer() {
     setStatus("loading");
     setStatusMessage(`Nalagam celotno vožnjo ${departure.routeShortName || departure.displayName} …`);
     try {
-      setActiveTrip(await fullTrip(departure.tripId));
+      setActiveTrip(selectTripRun(await fullTrip(departure.tripId), departure.tripId));
       setStatus("idle");
       setStatusMessage("");
     } catch (error) {
@@ -782,6 +782,15 @@ function normalizeDepartures(values: StopTime[], origin: TransitPlace): StopTime
   return [...unique.values()]
     .sort((a, b) => departureTimestamp(a) - departureTimestamp(b))
     .slice(0, 40);
+}
+
+function selectTripRun(journey: Itinerary, tripId: string): Itinerary {
+  const legs = journey.legs.filter(leg => leg.tripId === tripId);
+  if (!legs.length) return journey;
+  const startTime = legs[0].startTime;
+  const endTime = legs[legs.length - 1].endTime;
+  const duration = Math.max(0, (Date.parse(endTime) - Date.parse(startTime)) / 1000);
+  return { ...journey, legs, startTime, endTime, duration, transfers: 0 };
 }
 
 function departureTimestamp(value: StopTime): number {
