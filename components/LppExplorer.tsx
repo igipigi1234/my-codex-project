@@ -178,7 +178,7 @@ export default function LppExplorer() {
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
     mapRef.current = map;
     return () => { map.remove(); mapRef.current = null; };
-  }, []);
+  }, [loadState]);
 
   useEffect(() => {
     const map = mapRef.current;
