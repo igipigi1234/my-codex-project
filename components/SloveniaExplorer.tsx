@@ -35,7 +35,7 @@ export default function SloveniaExplorer() {
   const mapRef = useRef<MapLibreMap | null>(null);
   const startMarker = useRef<Marker | null>(null);
   const endMarker = useRef<Marker | null>(null);
-  const [mode, setMode] = useState<AppMode>("reach");
+  const [mode, setMode] = useState<AppMode>("route");
   const [target, setTarget] = useState<Target>("start");
   const [start, setStart] = useState<TransitPlace | null>(null);
   const [end, setEnd] = useState<TransitPlace | null>(null);
@@ -250,6 +250,19 @@ export default function SloveniaExplorer() {
     setStatusMessage("");
   }, []);
 
+  const updateQuery = (which: Target, value: string) => {
+    setTarget(which);
+    setSearchMessage("");
+    if (which === "start") {
+      setStartQuery(value);
+      if (start?.name !== value) setStart(null);
+    } else {
+      setEndQuery(value);
+      if (end?.name !== value) setEnd(null);
+    }
+    resetResults();
+  };
+
   const switchMode = (value: AppMode) => {
     setMode(value);
     setTarget("start");
@@ -418,7 +431,7 @@ export default function SloveniaExplorer() {
           </nav>
 
           {mode === "reach" && <ReachPanel
-            start={start} query={startQuery} setQuery={setStartQuery} setTarget={setTarget}
+            start={start} query={startQuery} setQuery={value => updateQuery("start", value)} setTarget={setTarget}
             date={date} setDate={setDate} time={time} setTime={setTime}
             minutes={minutes} setMinutes={value => { setMinutes(value); if (start && reachables.length) void executeReach(value); }}
             preferences={preferences} setPreferences={setPreferences}
@@ -429,7 +442,7 @@ export default function SloveniaExplorer() {
 
           {mode === "route" && <RoutePanel
             start={start} end={end} startQuery={startQuery} endQuery={endQuery}
-            setStartQuery={setStartQuery} setEndQuery={setEndQuery} setTarget={setTarget}
+            setStartQuery={value => updateQuery("start", value)} setEndQuery={value => updateQuery("end", value)} setTarget={setTarget}
             swap={() => { setStart(end); setStartQuery(end?.name ?? ""); setEnd(start); setEndQuery(start?.name ?? ""); }}
             date={date} setDate={setDate} time={time} setTime={setTime} arriveBy={arriveBy} setArriveBy={setArriveBy}
             preferences={preferences} setPreferences={setPreferences} execute={() => void executeRoute()}
@@ -438,7 +451,7 @@ export default function SloveniaExplorer() {
           />}
 
           {mode === "departures" && <DeparturesPanel
-            place={start} query={startQuery} setQuery={setStartQuery} setTarget={setTarget}
+            place={start} query={startQuery} setQuery={value => updateQuery("start", value)} setTarget={setTarget}
             date={date} setDate={setDate} time={time} setTime={setTime}
             preferences={preferences} setPreferences={setPreferences}
             execute={() => void executeDepartures()} status={status} statusMessage={statusMessage}
@@ -448,7 +461,7 @@ export default function SloveniaExplorer() {
 
           {mode === "compare" && <ComparePanel
             start={start} end={end} startQuery={startQuery} endQuery={endQuery}
-            setStartQuery={setStartQuery} setEndQuery={setEndQuery} setTarget={setTarget}
+            setStartQuery={value => updateQuery("start", value)} setEndQuery={value => updateQuery("end", value)} setTarget={setTarget}
             date={date} setDate={setDate} time={time} setTime={setTime}
             minutes={minutes} setMinutes={setMinutes} preferences={preferences} setPreferences={setPreferences}
             execute={() => void executeCompare()} status={status} statusMessage={statusMessage}
@@ -469,10 +482,10 @@ export default function SloveniaExplorer() {
           {shareMessage && <p className="microMessage" role="status">{shareMessage}</p>}
 
           <footer className="source">
-            <strong>Podatki: slovenski NAP, prevozniki in odprti GTFS viri prek Transitous/MOTIS</strong>
+            <strong>Naslovi: uradni Register naslovov GURS · Prevozi: NAP in odprti GTFS viri prek Transitous/MOTIS</strong>
             <span>Medkrajevni in mestni avtobusi, potniški vlaki ter drugi razpoložljivi JPP. Zemljevid: OpenStreetMap in CARTO.</span>
             <a href="https://transitous.org/sources/#slovenia" target="_blank" rel="noreferrer">Preglej uporabljene vire ↗</a>
-            <details><summary>Točnost, zasebnost in podatki v živo</summary><p>Načrtovalnik uporablja objavljene vozne rede in tiste realnočasovne podatke, ki jih posamezni vir zagotavlja. Oznaka »v živo« je prikazana le na odseku z dejanskim realnočasovnim podatkom. Vnesene lokacije in koordinate se pošljejo storitvi Transitous; aplikacija jih sama ne shranjuje, razen domače lokacije lokalno v tvojem brskalniku.</p></details>
+            <details><summary>Točnost, zasebnost in podatki v živo</summary><p>Načrtovalnik uporablja objavljene vozne rede in tiste realnočasovne podatke, ki jih posamezni vir zagotavlja. Oznaka »v živo« je prikazana le na odseku z dejanskim realnočasovnim podatkom. Iskalni niz se pošlje GURS in Transitousu, izbrani koordinati pa načrtovalniku Transitous; aplikacija jih sama ne shranjuje, razen domače lokacije lokalno v tvojem brskalniku.</p></details>
           </footer>
         </div>
       </aside>
@@ -497,10 +510,10 @@ type LocationProps = {
 };
 
 function LocationField({ value, query, setQuery, setTarget, which, label }: LocationProps) {
-  return <div className={`locationField ${value ? "selected" : ""}`} onClick={() => setTarget(which)}>
+  return <><div className={`locationField ${value ? "selected" : ""}`} onClick={() => setTarget(which)}>
     <span>{which === "start" ? "A" : "B"}</span>
-    <label><small>{label}</small><input aria-label={label} value={query} placeholder="Naslov, kraj ali postaja" onFocus={() => setTarget(which)} onChange={event => setQuery(event.target.value)} /></label>
-  </div>;
+    <label><small>{label}</small><input aria-label={label} value={query} placeholder="Npr. Radohova vas 9" onFocus={() => setTarget(which)} onChange={event => setQuery(event.target.value)} autoComplete="off" /></label>
+  </div>{query.length >= 3 && !value && <p className="addressHelp">Izberi točen naslov, kraj ali postajo s seznama rezultatov.</p>}</>;
 }
 
 type DateTimeProps = { date: string; setDate: (value: string) => void; time: string; setTime: (value: string) => void };
@@ -571,14 +584,15 @@ type RoutePanelProps = DateTimeProps & {
 
 function RoutePanel(props: RoutePanelProps) {
   return <>
-    <span className="eyebrow">Od vrat do vrat</span><h1>Načrtuj pot po Sloveniji</h1>
+    <span className="eyebrow">Od doma do cilja</span><h1>Načrtuj pot od vrat do vrat</h1>
+    <p className="intro">Vpiši hišni naslov kjer koli v Sloveniji. V načrt poti vključimo hojo do prve postaje, vse vožnje in hojo do končnega cilja.</p>
     <LocationField value={props.start} query={props.startQuery} setQuery={props.setStartQuery} setTarget={props.setTarget} which="start" label="Začetek" />
     <button type="button" className="swapButton" onClick={props.swap}>⇅ Zamenjaj A in B</button>
     <LocationField value={props.end} query={props.endQuery} setQuery={props.setEndQuery} setTarget={props.setTarget} which="end" label="Cilj" />
     <DateTimeControls {...props} />
     <div className="segmented"><button type="button" className={!props.arriveBy ? "active" : ""} onClick={() => props.setArriveBy(false)}>Odhod ob</button><button type="button" className={props.arriveBy ? "active" : ""} onClick={() => props.setArriveBy(true)}>Prihod do</button></div>
     <TransportPreferences value={props.preferences} setValue={props.setPreferences} />
-    <button className="primary" disabled={props.status === "loading" || !selectedTransitModes(props.preferences).length} onClick={props.execute}>{props.status === "loading" ? "Iščem …" : "Poišči povezave"}</button>
+    <button className="primary" disabled={props.status === "loading" || !props.start || !props.end || !selectedTransitModes(props.preferences).length} onClick={props.execute}>{props.status === "loading" ? "Iščem …" : "Poišči povezave"}</button>
     <StatusBox status={props.status} message={props.statusMessage} />
     {props.itineraries.length > 0 && <>
       <div className="sectionHeading"><h2>Predlagane povezave</h2><small>{props.itineraries.length} možnosti</small></div>
@@ -640,7 +654,7 @@ function ComparePanel(props: ComparePanelProps) {
 }
 
 function SearchResults({ values, searching, message, choose }: { values: GeocodeMatch[]; searching: boolean; message: string; choose: (value: GeocodeMatch) => void }) {
-  return <div className="searchResults" role="listbox">{searching && <p>Iščem po Sloveniji …</p>}{message && <p>{message}</p>}{values.map(value => <button type="button" key={value.id} onClick={() => choose(value)}><strong>{value.name}</strong><small>{placeSubtitle(value)}</small></button>)}</div>;
+  return <div className="searchResults" role="listbox">{searching && <p>Iščem po uradnih naslovih in postajah …</p>}{message && <p>{message}</p>}{values.map(value => <button type="button" key={value.id || `${value.name}-${value.lat}-${value.lon}`} onClick={() => choose(value)}><strong>{value.name}</strong><small>{placeSubtitle(value)}</small></button>)}</div>;
 }
 
 function JourneyOption({ journey, active, label, choose }: { journey: Itinerary; active: boolean; label: string; choose: () => void }) {
@@ -842,7 +856,7 @@ function matchToPlace(value: GeocodeMatch): TransitPlace {
 
 function placeSubtitle(value: GeocodeMatch): string {
   const area = value.areas?.find(item => item.default)?.name ?? value.areas?.filter(item => item.adminLevel >= 6).at(-1)?.name;
-  const kind = value.type === "STOP" ? formatModes(value.modes) || "Postajališče" : [value.street, value.houseNumber].filter(Boolean).join(" ") || "Kraj ali naslov";
+  const kind = value.source === "GURS" ? "Uradni naslov GURS" : value.type === "STOP" ? formatModes(value.modes) || "Postajališče" : [value.street, value.houseNumber].filter(Boolean).join(" ") || "Kraj ali naslov";
   return [kind, value.zip, area].filter(Boolean).join(" · ");
 }
 
