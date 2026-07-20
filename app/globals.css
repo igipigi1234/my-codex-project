@@ -133,7 +133,7 @@ h2 { margin: 0; font-size: 11px; letter-spacing: .08em; text-transform: uppercas
 .scheduleRow { display: grid; grid-template-columns: 44px 1fr; gap: 8px; padding: 6px 0; border-left: 2px solid #cbd8d2; font-size: 9px; }
 .scheduleRow time { margin-left: 8px; color: var(--muted); font-weight: 800; font-variant-numeric: tabular-nums; }
 
-.departureBoard { overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
+.departureBoard { max-height: 55vh; overflow: auto; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
 .departureBoard button { display: grid; grid-template-columns: 43px 48px 1fr 12px; width: 100%; align-items: center; gap: 8px; padding: 10px 11px; border: 0; border-bottom: 1px solid #edf2ef; background: #fff; cursor: pointer; text-align: left; }
 .departureBoard button:hover { background: #edfff6; }
 .departureBoard time { font-size: 12px; font-weight: 900; font-variant-numeric: tabular-nums; }
